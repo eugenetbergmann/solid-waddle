@@ -1,144 +1,49 @@
-WITH Safe_Source AS (
-    SELECT
-        CAST(ISNULL(p.ITEMNMBR, '') AS VARCHAR(50)) AS ITEMNMBR,
-        CAST(ISNULL(p.ORDERNUMBER, '') AS VARCHAR(50)) AS ORDERNUMBER,
-        CAST(ISNULL(p.MRPTYPE, '') AS VARCHAR(10)) AS MRPTYPE,
-        CAST(ISNULL(p.STSDESCR, '') AS VARCHAR(100)) AS STSDESCR,
-        CAST(ISNULL(p.DUEDATE, '') AS VARCHAR(50)) AS DUEDATE,
-        CAST(ISNULL(p.[Date + Expiry], '') AS VARCHAR(50)) AS DatePlusExpiry,
-        TRY_CAST(p.Deductions AS DECIMAL(18,6)) AS Deductions_Num,
-        TRY_CAST(p.Expiry AS DECIMAL(18,6)) AS Expiry_Num,
-        TRY_CAST(p.[PO's] AS DECIMAL(18,6)) AS POs_Num
-    FROM dbo.ETB_PAB p
-),
-
-ItemBegBal AS (
-    SELECT 
-        ITEMNMBR,
-        MAX(COALESCE(TRY_CAST(BEG_BAL AS DECIMAL(18,6)), 0)) AS Starting_Balance
-    FROM dbo.ETB_PAB
-    GROUP BY ITEMNMBR
-),
-
-Safe_PAB_AUTO AS (
-    SELECT
-        UPPER(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(ISNULL(ORDERNUMBER, ''), 'MO', ''), '-', ''), ' ', ''), '/', ''), '.', '')) AS CleanOrder,
-        CAST(ISNULL(Construct, '') AS VARCHAR(100)) AS Construct,
-        CAST(ISNULL(FG, '') AS VARCHAR(50)) AS FG,
-        CAST(ISNULL([FG Desc], '') AS VARCHAR(200)) AS FG_Desc,
-        CAST(ISNULL(ItemDescription, '') AS VARCHAR(500)) AS ItemDescription,
-        CAST(ISNULL(UOMSCHDL, '') AS VARCHAR(50)) AS UOMSCHDL,
-        CAST(ISNULL(VendorItem, '') AS VARCHAR(50)) AS VendorItem,
-        CAST(ISNULL(PRIME_VNDR, '') AS VARCHAR(50)) AS PRIME_VNDR
-    FROM dbo.ETB_PAB_AUTO
-),
-
-Safe_Demand AS (
-    SELECT 
-        s.ITEMNMBR, s.ORDERNUMBER, s.MRPTYPE, s.STSDESCR, s.DUEDATE,
-        s.Deductions_Num, s.Expiry_Num, s.POs_Num, s.DatePlusExpiry,
-        UPPER(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(ISNULL(s.ORDERNUMBER, ''), 'MO', ''), '-', ''), ' ', ''), '/', ''), '.', '')) AS CleanOrder
-    FROM Safe_Source s
-    WHERE s.MRPTYPE = '6'
-      AND CAST(s.STSDESCR AS VARCHAR(100)) <> 'Partially Received'
-      AND CAST(s.ITEMNMBR AS VARCHAR(50)) NOT LIKE '60.%'
-      AND CAST(s.ITEMNMBR AS VARCHAR(50)) NOT LIKE '70.%'
-),
-
-Safe_Supply AS (
-    SELECT 
-        s.ITEMNMBR, s.ORDERNUMBER, s.MRPTYPE, s.STSDESCR, s.DUEDATE,
-        s.Deductions_Num, s.Expiry_Num, s.POs_Num, s.DatePlusExpiry,
-        UPPER(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(ISNULL(s.ORDERNUMBER, ''), 'MO', ''), '-', ''), ' ', ''), '/', ''), '.', '')) AS CleanOrder
-    FROM Safe_Source s
-    WHERE s.MRPTYPE IN ('1', '2', '3', '4', '5', '7', '11')
-),
-
-EventStream AS (
-    SELECT
-        s.ITEMNMBR,
-        s.ORDERNUMBER,
-        s.MRPTYPE,
-        s.STSDESCR,
-        s.DUEDATE,
-        s.DatePlusExpiry,
-        s.Deductions_Num,
-        s.Expiry_Num,
-        s.POs_Num,
-        s.CleanOrder,
-        a.Construct,
-        a.FG,
-        a.FG_Desc,
-        a.ItemDescription,
-        a.UOMSCHDL,
-        a.VendorItem,
-        a.PRIME_VNDR
-    FROM (SELECT * FROM Safe_Supply UNION ALL SELECT * FROM Safe_Demand) AS s
-    LEFT JOIN Safe_PAB_AUTO a ON s.CleanOrder = a.CleanOrder
-),
-
-WithBegBal AS (
-    SELECT
-        e.*,
-        COALESCE(ib.Starting_Balance, 0) AS Starting_Balance
-    FROM EventStream e
-    LEFT JOIN ItemBegBal ib ON e.ITEMNMBR = ib.ITEMNMBR
-),
-
-Enhanced AS (
-    SELECT
-        *,
-        TRY_CAST(DUEDATE AS DATE) AS DueDate_Date,
-        TRY_CAST(DatePlusExpiry AS DATE) AS DatePlusExpiry_Date,
-        COALESCE(Deductions_Num, 0) AS Deductions_C,
-        COALESCE(Expiry_Num, 0) AS Expiry_C,
-        COALESCE(POs_Num, 0) AS POs_C
-    FROM WithBegBal
-),
-
-WithDeltaAndOrder AS (
-    SELECT
-        *,
-        POs_C - Deductions_C - Expiry_C AS Delta_Qty,
-        ROW_NUMBER() OVER (PARTITION BY ITEMNMBR 
-                           ORDER BY DueDate_Date ASC, DatePlusExpiry_Date ASC, ORDERNUMBER ASC) AS RowNum_PerItem
-    FROM Enhanced
-),
-
-FinalCalc AS (
-    SELECT
-        *,
-        Starting_Balance + SUM(Delta_Qty) OVER (
-            PARTITION BY ITEMNMBR 
-            ORDER BY DueDate_Date ASC, DatePlusExpiry_Date ASC, ORDERNUMBER ASC
-            ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
-        ) AS Calc_Running_Balance
-    FROM WithDeltaAndOrder
-)
-
-SELECT
-    ITEMNMBR,
-    ORDERNUMBER,
-    MRPTYPE,
-    STSDESCR,
-    DUEDATE,
-    DatePlusExpiry,
-    CASE WHEN RowNum_PerItem = 1 THEN CAST(Starting_Balance AS VARCHAR(50)) ELSE '' END AS BEG_BAL,
-    CAST(Deductions_C AS VARCHAR(50)) AS Deductions,
-    CAST(Expiry_C AS VARCHAR(50)) AS Expiry,
-    CAST(POs_C AS VARCHAR(50)) AS POs,
-    CAST(Calc_Running_Balance AS VARCHAR(50)) AS Running_Balance,
-    Construct,
-    FG,
-    FG_Desc,
-    ItemDescription,
-    UOMSCHDL,
-    VendorItem,
-    PRIME_VNDR,
-    CleanOrder
-FROM FinalCalc
-ORDER BY 
-    ITEMNMBR, 
-    DueDate_Date, 
-    DatePlusExpiry_Date, 
-    ORDERNUMBER;
+SELECT        TOP 100 PERCENT Final.ORDERNUMBER, Final.Construct, Final.FG, Final.[FG Desc], Final.ITEMNMBR, Final.ItemDescription, Final.UOMSCHDL, Final.STSDESCR, Final.DUEDATE, Final.[Expiry Dates], Final.[Date + Expiry], 
+                         Final.MRPTYPE, Final.BEG_BAL_Num AS BEG_BAL, Final.Original_Deductions AS Deductions, Final.Original_Expiry AS Expiry, Final.Original_POs AS [PO's], Final.Original_Running_Balance AS Running_Balance, 
+                         Final.VendorItem, Final.INCLUDE_MRP, Final.SITE, Final.PRIME_VNDR, Final.PURCHASING_LT, Final.PLANNING_LT, Final.ORDER_POINT_QTY, Final.SAFETY_STOCK, Final.MRP_IssueDate, Final.WCID_From_MO, 
+                         Final.Issued, Final.Remaining, Final.Has_Issued, Final.IssueDate_Mismatch, Final.Early_Issue_Flag
+FROM            (SELECT        Core.*, ISNULL(ml.MRP_IssueDate, '') AS MRP_IssueDate, ISNULL(ml.WCID_I, '') AS WCID_From_MO, ISNULL(ml.Total_Issued, 0) AS Issued, ISNULL(ml.Remaining_Required, 0) AS Remaining, 
+                                                    CASE WHEN ISNULL(ml.Total_Issued, 0) > 0 THEN 'YES' ELSE 'NO' END AS Has_Issued, CASE WHEN ml.MRP_IssueDate IS NULL OR
+                                                    Core.[Date + Expiry] IS NULL THEN 'NO' WHEN ml.MRP_IssueDate <> Core.[Date + Expiry] THEN 'YES' ELSE 'NO' END AS IssueDate_Mismatch, CASE WHEN ISNULL(ml.Total_Issued, 0) > 0 AND 
+                                                    Core.[Date + Expiry] IS NOT NULL AND Core.[Date + Expiry] < DATEADD(DAY, - 7, CAST('2025-12-29' AS date)) /* Updated to current date*/ THEN 'YES' ELSE 'NO' END AS Early_Issue_Flag
+                          FROM            (SELECT        *
+                                                    FROM            (SELECT        j.*, ROW_NUMBER() OVER (PARTITION BY j.ORDERNUMBER, j.FG, j.ITEMNMBR
+                                                                              ORDER BY j.Construct, j.[FG Desc], j.STSDESCR) AS rn_final
+                                                    FROM            (SELECT        CAST(COALESCE (NULLIF (LTRIM(RTRIM(p_norm.ORDERNUMBER)), ''), NULLIF (LTRIM(RTRIM(m_norm.ORDERNUMBER)), ''), '') AS varchar(255)) AS ORDERNUMBER, 
+                                                                                                        CAST(ISNULL(m_norm.Customer, '') AS varchar(255)) AS Construct, CAST(ISNULL(m_norm.FG, '') AS varchar(255)) AS FG, CAST(ISNULL(m_norm.[FG Desc], '') AS varchar(255)) AS [FG Desc], 
+                                                                                                        CAST(ISNULL(p_norm.ITEMNMBR, '') AS varchar(255)) AS ITEMNMBR, CAST(ISNULL(item_desc.ItemDescription, '') AS varchar(255)) AS ItemDescription, CAST(ISNULL(item_desc.UOMSCHDL, 
+                                                                                                        '') AS varchar(255)) AS UOMSCHDL, p_norm.STSDESCR, p_norm.DUEDATE, p_norm.[Expiry Dates], p_norm.[Date + Expiry], p_norm.MRPTYPE, p_norm.VendorItem, p_norm.INCLUDE_MRP, 
+                                                                                                        p_norm.SITE, p_norm.PRIME_VNDR, p_norm.PURCHASING_LT, p_norm.PLANNING_LT, p_norm.ORDER_POINT_QTY, p_norm.SAFETY_STOCK, p_norm.CleanItem, p_norm.CleanOrder, 
+                                                                                                        p_norm.Deductions AS Original_Deductions, p_norm.Expiry AS Original_Expiry, p_norm.[PO's] AS Original_POs, p_norm.Running_Balance AS Original_Running_Balance, 
+                                                                                                        /* Safe numeric conversion for BEG_BAL (used in display)*/ CASE WHEN ISNUMERIC(LTRIM(RTRIM(p_norm.BEG_BAL))) = 1 THEN CAST(LTRIM(RTRIM(p_norm.BEG_BAL)) AS decimal(18, 5)) 
+                                                                                                        ELSE 0 END AS BEG_BAL_Num, /* CleanDeductions for safe join*/ CASE WHEN ISNUMERIC(LTRIM(RTRIM(p_norm.Deductions))) = 1 THEN CAST(LTRIM(RTRIM(p_norm.Deductions)) 
+                                                                                                        AS decimal(18, 5)) ELSE 0 END AS CleanDeductions
+                                                                              FROM            (SELECT        p.*, UPPER(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(LTRIM(RTRIM(CONVERT(varchar(255), REPLACE(p.ORDERNUMBER, 'MO', '')))), '-', ''), ' ', ''), '/', ''), '.', ''), '#', '')) 
+                                                                                                                                  AS CleanOrder, LTRIM(RTRIM(p.ITEMNMBR)) AS CleanItem
+                                                                                                        FROM            dbo.ETB_PAB_MO p
+                                                                                                        WHERE        p.STSDESCR <> 'Partially Received' AND LTRIM(RTRIM(p.ITEMNMBR)) NOT LIKE '60.%' AND LTRIM(RTRIM(p.ITEMNMBR)) NOT LIKE '70.%') p_norm LEFT JOIN
+                                                                                                            (SELECT        m.*, UPPER(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(LTRIM(RTRIM(CONVERT(varchar(255), REPLACE(m.ORDERNUMBER, 'MO', '')))), '-', ''), ' ', ''), '/', ''), '.', ''), '#', '')) 
+                                                                                                                                        AS CleanOrder, ROW_NUMBER() OVER (PARTITION BY UPPER(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(LTRIM(RTRIM(CONVERT(varchar(255), 
+                                                                                                                                        REPLACE(m.ORDERNUMBER, 'MO', '')))), '-', ''), ' ', ''), '/', ''), '.', ''), '#', '')), m.FG
+                                                                                                              ORDER BY m.Customer, m.[FG Desc], m.ORDERNUMBER) AS rn_fg
+                                                                              FROM            dbo.ETB_ActiveDemand_Union_FG_MO m) m_norm ON p_norm.CleanOrder = m_norm.CleanOrder AND (m_norm.rn_fg = 1 OR
+                                                                              m_norm.rn_fg IS NULL) LEFT JOIN
+                                                                                  (SELECT        [Item Number] AS ItemNumber, ITEMDESC AS ItemDescription, UOMSCHDL
+                                                                                    FROM            dbo.Prosenthal_Vendor_Items
+                                                                                    WHERE        Active = 'Yes') item_desc ON p_norm.ITEMNMBR = item_desc.ItemNumber) j) ranked
+WHERE        ranked.rn_final = 1) Core LEFT JOIN
+    (SELECT        CleanMO, ITEMNMBR, MRP_IssueDate, WCID_I, Total_Issued, Remaining_Required, Required_Qty, rn_qty, rn_any
+      FROM            (SELECT        RTRIM(LTRIM(a.MANUFACTUREORDER_I)) AS CleanMO, RTRIM(LTRIM(a.ITEMNMBR)) AS ITEMNMBR, CAST(a.MRPISSUEDATE_I AS date) AS MRP_IssueDate, a.WCID_I, 
+                                                          a.QTY_ISSUED_I + a.QTY_BACKFLUSHED_I AS Total_Issued, a.MRPAMOUNT_I - a.ATYALLOC - a.QTY_ISSUED_I - a.QTY_BACKFLUSHED_I AS Remaining_Required, a.MRPAMOUNT_I AS Required_Qty, 
+                                                          ROW_NUMBER() OVER (PARTITION BY RTRIM(LTRIM(a.MANUFACTUREORDER_I)), RTRIM(LTRIM(a.ITEMNMBR)), a.MRPAMOUNT_I
+                                ORDER BY CAST(a.MRPISSUEDATE_I AS date) DESC) AS rn_qty, ROW_NUMBER() OVER (PARTITION BY RTRIM(LTRIM(a.MANUFACTUREORDER_I)), RTRIM(LTRIM(a.ITEMNMBR))
+      ORDER BY CASE WHEN (a.QTY_ISSUED_I + a.QTY_BACKFLUSHED_I) > 0 THEN 1 ELSE 2 END, ABS(a.MRPAMOUNT_I) DESC, CAST(a.MRPISSUEDATE_I AS date) DESC) AS rn_any
+FROM            dbo.PK010033 AS a WITH (NOLOCK) LEFT OUTER JOIN
+                         dbo.IV00101 AS b WITH (NOLOCK) ON a.ITEMNMBR = b.ITEMNMBR
+WHERE        EXISTS
+                             (SELECT        1
+                               FROM            dbo.WO010032 AS w WITH (NOLOCK)
+                               WHERE        w.MANUFACTUREORDERST_I IN (2, 3) AND RTRIM(LTRIM(w.MANUFACTUREORDER_I)) = RTRIM(LTRIM(a.MANUFACTUREORDER_I)))) ranked_ledger) ml ON Core.CleanOrder = ml.CleanMO AND 
+Core.CleanItem = ml.ITEMNMBR AND ((Core.CleanDeductions = ml.Required_Qty AND ml.rn_qty = 1) OR
+ml.rn_any = 1)) Final
+ORDER BY Final.[Date + Expiry], Final.ORDERNUMBER, Final.ITEMNMBR;
