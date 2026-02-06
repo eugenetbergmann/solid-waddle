@@ -1,0 +1,84 @@
+WITH Safe_Source AS (
+    SELECT
+        CAST(ISNULL(p.ORDERNUMBER, '') AS VARCHAR(50)) AS ORDERNUMBER,
+        CAST(ISNULL(p.ITEMNMBR, '') AS VARCHAR(50)) AS ITEMNMBR,
+        CAST(ISNULL(p.MRPTYPE, '') AS VARCHAR(10)) AS MRPTYPE,
+        CAST(ISNULL(p.STSDESCR, '') AS VARCHAR(100)) AS STSDESCR,
+        CAST(ISNULL(p.DUEDATE, '') AS VARCHAR(50)) AS DUEDATE,
+        TRY_CAST(p.BEG_BAL AS DECIMAL(18,6)) AS Total_Num,
+        CAST(ISNULL(p.BEG_BAL, '') AS VARCHAR(50)) AS Total,
+        TRY_CAST(p.Deductions AS DECIMAL(18,6)) AS Deductions_Num,
+        CAST(ISNULL(p.Deductions, '') AS VARCHAR(50)) AS Deductions,
+        CAST(ISNULL(p.[Date + Expiry], '') AS VARCHAR(50)) AS DatePlusExpiry,
+        UPPER(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(ISNULL(p.ORDERNUMBER, ''), 'MO', ''), '-', ''), ' ', ''), '/', ''), '.', '')) AS CleanOrder,
+        CASE WHEN p.ITEMNMBR LIKE 'MO-%' THEN 1 ELSE 0 END AS Is_Suppressed,
+        TRY_CONVERT(date, p.DUEDATE) AS Due_Date,
+        TRY_CONVERT(date, p.[Date + Expiry]) AS Expiry_Date
+    FROM dbo.ETB_PAB p
+),
+
+Safe_PAB_AUTO AS (
+    SELECT
+        UPPER(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(ISNULL(ORDERNUMBER, ''), 'MO', ''), '-', ''), ' ', ''), '/', ''), '.', '')) AS CleanOrder,
+        CAST(ISNULL(Construct, '') AS VARCHAR(100)) AS Construct,
+        CAST(ISNULL(FG, '') AS VARCHAR(50)) AS FG,
+        CAST(ISNULL([FG Desc], '') AS VARCHAR(200)) AS FG_Desc,
+        CAST(ISNULL(ItemDescription, '') AS VARCHAR(500)) AS ItemDescription,
+        CAST(ISNULL(UOMSCHDL, '') AS VARCHAR(50)) AS UOMSCHDL,
+        CAST(ISNULL(VendorItem, '') AS VARCHAR(50)) AS VendorItem,
+        CAST(ISNULL(PRIME_VNDR, '') AS VARCHAR(50)) AS PRIME_VNDR
+    FROM dbo.ETB_PAB_AUTO
+),
+
+Safe_Demand AS (
+    SELECT s.ORDERNUMBER, s.ITEMNMBR, s.MRPTYPE, s.STSDESCR, s.DUEDATE,
+           s.Total, s.Total_Num, s.Deductions, s.Deductions_Num, s.DatePlusExpiry,
+           s.CleanOrder, s.Is_Suppressed, s.Due_Date, s.Expiry_Date
+    FROM Safe_Source s
+    WHERE s.MRPTYPE = '6'
+      AND CAST(s.STSDESCR AS VARCHAR(100)) <> 'Partially Received'
+      AND CAST(s.ITEMNMBR AS VARCHAR(50)) NOT LIKE '60.%'
+      AND CAST(s.ITEMNMBR AS VARCHAR(50)) NOT LIKE '70.%'
+),
+
+Safe_Supply AS (
+    SELECT s.ORDERNUMBER, s.ITEMNMBR, s.MRPTYPE, s.STSDESCR, s.DUEDATE,
+           s.Total, s.Total_Num, s.Deductions, s.Deductions_Num, s.DatePlusExpiry,
+           s.CleanOrder, s.Is_Suppressed, s.Due_Date, s.Expiry_Date
+    FROM Safe_Source s
+    WHERE s.MRPTYPE IN ('1', '2', '3', '4', '5')
+      AND CAST(s.Total AS VARCHAR(50)) <> ''
+),
+
+EventStream AS (
+    SELECT
+        s.ORDERNUMBER, s.ITEMNMBR, s.MRPTYPE, s.STSDESCR, s.DUEDATE,
+        s.Total, s.Total_Num, s.Deductions, s.Deductions_Num, s.DatePlusExpiry,
+        s.CleanOrder, s.Is_Suppressed, s.Due_Date, s.Expiry_Date,
+        a.Construct, a.FG, a.FG_Desc, a.ItemDescription, a.UOMSCHDL,
+        a.VendorItem, a.PRIME_VNDR,
+        COALESCE(s.Expiry_Date, s.Due_Date) AS Effective_Date,
+        CASE WHEN s.ORDERNUMBER = 'Beg Bal' THEN 0 ELSE 1 END AS BegBalFirst,
+        CASE WHEN s.MRPTYPE = '6' THEN ISNULL(s.Deductions_Num, 0) ELSE 0 END AS Raw_Demand,
+        CASE
+            WHEN s.MRPTYPE IN ('1', '2', '3', '4', '5', '9') THEN ISNULL(s.Total_Num, 0)
+            WHEN s.MRPTYPE = '6' THEN -ISNULL(s.Deductions_Num, 0)
+            WHEN s.MRPTYPE = '7' THEN ISNULL(s.Total_Num, 0)
+            WHEN s.MRPTYPE = '11' THEN ISNULL(s.Total_Num, 0)
+            ELSE ISNULL(s.Total_Num, 0)
+        END AS Net,
+        CASE WHEN s.ORDERNUMBER = 'Beg Bal' THEN ISNULL(s.Total_Num, 0) ELSE 0 END AS BEG_BAL,
+        CASE WHEN s.MRPTYPE = '11' THEN ISNULL(s.Total_Num, 0) ELSE 0 END AS Expiry,
+        CASE WHEN s.MRPTYPE = '7' THEN ISNULL(s.Total_Num, 0) ELSE 0 END AS POs,
+        CASE WHEN s.MRPTYPE = '6' THEN ISNULL(s.Deductions_Num, 0) ELSE 0 END AS Deductions_Val
+    FROM (SELECT * FROM Safe_Supply UNION ALL SELECT * FROM Safe_Demand) AS s
+    LEFT JOIN Safe_PAB_AUTO a ON s.CleanOrder = a.CleanOrder
+)
+
+SELECT
+    ORDERNUMBER, ITEMNMBR, MRPTYPE, STSDESCR, DUEDATE, Total, Deductions,
+    DatePlusExpiry, CleanOrder, Is_Suppressed, Due_Date, Effective_Date,
+    BegBalFirst, Raw_Demand, Net, BEG_BAL, Expiry, POs, Deductions_Val,
+    Construct, FG, FG_Desc, ItemDescription, UOMSCHDL, VendorItem, PRIME_VNDR
+FROM EventStream
+ORDER BY ITEMNMBR, BegBalFirst, Effective_Date, ORDERNUMBER;
