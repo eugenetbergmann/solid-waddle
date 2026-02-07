@@ -3,7 +3,13 @@ WITH p_norm AS (
         p.*,
         UPPER(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(LTRIM(RTRIM(CONVERT(varchar(255), REPLACE(p.ORDERNUMBER, 'MO', '')))), '-', ''), ' ', ''), '/', ''), '.', ''), '#', '')) AS CleanOrder,
         LTRIM(RTRIM(p.ITEMNMBR)) AS CleanItem,
-        CASE WHEN ISNUMERIC(LTRIM(RTRIM(p.Deductions))) = 1 THEN CAST(LTRIM(RTRIM(p.Deductions)) AS decimal(18, 5)) ELSE 0 END AS CleanDeductions
+        CASE WHEN ISNUMERIC(LTRIM(RTRIM(p.Deductions))) = 1 THEN CAST(LTRIM(RTRIM(p.Deductions)) AS decimal(18, 5)) ELSE 0 END AS CleanDeductions,
+        -- New unified value column for warehouse routing
+        CASE 
+            WHEN p.SITE LIKE 'WC-W%' THEN 
+                CONCAT(p.ITEMNMBR, ' - ', p.LOT_Number, ' - ', p.Bin) 
+            ELSE NULL 
+        END AS Unified_Value
     FROM dbo.ETB_PAB_MO p
     WHERE p.STSDESCR <> 'Partially Received'
       AND LTRIM(RTRIM(p.ITEMNMBR)) NOT LIKE '60.%'
@@ -59,7 +65,8 @@ joined AS (
              ELSE 0 END AS BEG_BAL_Num,
         p_norm.CleanOrder,
         p_norm.CleanItem,
-        p_norm.CleanDeductions
+        p_norm.CleanDeductions,
+        p_norm.Unified_Value
     FROM p_norm
     LEFT JOIN m_norm ON p_norm.CleanOrder = m_norm.CleanOrder AND m_norm.rn_fg = 1
     LEFT JOIN item_desc ON p_norm.ITEMNMBR = item_desc.ItemNumber
@@ -156,5 +163,6 @@ SELECT
     FG,
     [FG Desc],
     STSDESCR,
-    MRPTYPE
+    MRPTYPE,
+    Unified_Value
 FROM Final;
