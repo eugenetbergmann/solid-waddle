@@ -12,6 +12,7 @@ WITH p_norm AS (
         END AS Unified_Value
     FROM dbo.ETB_PAB_MO p
     WHERE p.STSDESCR <> 'Partially Received'
+      AND p.STSDESCR <> 'SCRAP'
       AND LTRIM(RTRIM(p.ITEMNMBR)) NOT LIKE '60.%'
       AND LTRIM(RTRIM(p.ITEMNMBR)) NOT LIKE '70.%'
 ),
