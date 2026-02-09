@@ -1,25 +1,9 @@
--- ============================================================
--- View: [dbo].[ETB_WC_INV_Unified_WFQ_Extended_v32]
--- Description: Sovereign Schedule Deduction Engine v3.2 Extension
---              Projects AVAILABLE BALANCE forward per demand row,
---              applying WFQ pipeline supply only after stockout
---              when Estimated_Release_Date <= DUEDATE
--- 
--- Base Ledger: ETB_WC_INV_Unified (immutable)
--- WFQ Supply:  ETB_WFQ_PIPE (View_Level='ITEM_LEVEL')
--- 
--- Overlay Columns (additive, non-destructive):
---   - Ledger_WFQ_Influx: Cumulative WFQ supply available by DUEDATE
---   - Ledger_Extended_Balance: Running_Balance + Ledger_WFQ_Influx
---   - WFQ_Extended_Status: Coverage status indicator
--- ============================================================
-
-CREATE VIEW [dbo].[ETB_WC_INV_Unified_WFQ_Extended_v32]
-AS
+-- WFQ Supply Allocation View
+-- Builds on ETB_WC_INV_Unified to add pipeline supply and extended balance logic
 
 WITH Demand_Ledger AS (
-    -- Base ledger: fully immutable projection
-    SELECT 
+    -- Reference the combined view output
+    SELECT
         ITEMNMBR,
         ItemDescription,
         UOM,
@@ -56,17 +40,19 @@ WITH Demand_Ledger AS (
 
 Demand_Seq AS (
     -- Sequence demand rows per item by due date for stockout detection
-    SELECT *,
-           ROW_NUMBER() OVER (PARTITION BY ITEMNMBR ORDER BY DUEDATE) AS Demand_Seq
+    SELECT 
+        *,
+        ROW_NUMBER() OVER (PARTITION BY ITEMNMBR ORDER BY DUEDATE) AS Demand_Seq
     FROM Demand_Ledger
 ),
 
 Stockout_Detection AS (
     -- Detect first stockout per item (where Running_Balance <= 0)
     -- This establishes the threshold for when WFQ supply begins to apply
-    SELECT *,
-           MIN(CASE WHEN CAST(Running_Balance AS decimal(18,6)) <= 0 THEN Demand_Seq END) 
-               OVER (PARTITION BY ITEMNMBR) AS Stockout_Seq
+    SELECT 
+        *,
+        MIN(CASE WHEN CAST(Running_Balance AS decimal(18, 6)) <= 0 THEN Demand_Seq END) 
+            OVER (PARTITION BY ITEMNMBR) AS Stockout_Seq
     FROM Demand_Seq
 ),
 
@@ -94,6 +80,7 @@ WFQ_Allocated AS (
         d.Demand_Seq,
         d.DUEDATE,
         d.Running_Balance AS Ledger_Base_Balance,
+        d.Stockout_Seq,
         SUM(CASE 
                 WHEN w.Estimated_Release_Date <= d.DUEDATE 
                      AND d.Demand_Seq >= d.Stockout_Seq THEN w.WFQ_Qty
@@ -110,12 +97,12 @@ Extended_Ledger AS (
     SELECT 
         d.*,
         ISNULL(w.Ledger_WFQ_Influx, 0) AS Ledger_WFQ_Influx,
-        CAST(d.Running_Balance AS decimal(18,6)) + ISNULL(w.Ledger_WFQ_Influx, 0) AS Ledger_Extended_Balance,
+        CAST(d.Running_Balance AS decimal(18, 6)) + ISNULL(w.Ledger_WFQ_Influx, 0) AS Ledger_Extended_Balance,
         CASE 
             WHEN w.Ledger_WFQ_Influx IS NULL OR w.Ledger_WFQ_Influx <= 0 THEN 'LEDGER_ONLY'
-            WHEN CAST(d.Running_Balance AS decimal(18,6)) + ISNULL(w.Ledger_WFQ_Influx, 0) > 0 
-                 AND CAST(d.Running_Balance AS decimal(18,6)) <= 0 THEN 'WFQ_RESCUED'
-            WHEN CAST(d.Running_Balance AS decimal(18,6)) + ISNULL(w.Ledger_WFQ_Influx, 0) > 0 THEN 'WFQ_ENHANCED'
+            WHEN CAST(d.Running_Balance AS decimal(18, 6)) + ISNULL(w.Ledger_WFQ_Influx, 0) > 0 
+                 AND CAST(d.Running_Balance AS decimal(18, 6)) <= 0 THEN 'WFQ_RESCUED'
+            WHEN CAST(d.Running_Balance AS decimal(18, 6)) + ISNULL(w.Ledger_WFQ_Influx, 0) > 0 THEN 'WFQ_ENHANCED'
             ELSE 'WFQ_INSUFFICIENT'
         END AS WFQ_Extended_Status
     FROM Stockout_Detection d
@@ -162,5 +149,3 @@ SELECT
     Ledger_Extended_Balance,
     WFQ_Extended_Status
 FROM Extended_Ledger;
-
-GO
