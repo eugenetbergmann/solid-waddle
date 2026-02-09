@@ -1,31 +1,37 @@
 WITH p_norm AS (
-    SELECT
-        p.*,
-        UPPER(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(LTRIM(RTRIM(CONVERT(varchar(255), REPLACE(p.ORDERNUMBER, 'MO', '')))), '-', ''), ' ', ''), '/', ''), '.', ''), '#', '')) AS CleanOrder,
+    SELECT 
+        p.*, 
+        UPPER(LTRIM(RTRIM(CONVERT(varchar(255), 
+            REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(p.ORDERNUMBER, 'MO', ''), '-', ''), ' ', ''), '/', ''), '.', ''), '#', '')
+        )))) AS CleanOrder,
         LTRIM(RTRIM(p.ITEMNMBR)) AS CleanItem,
-        CASE WHEN ISNUMERIC(LTRIM(RTRIM(p.Deductions))) = 1 THEN CAST(LTRIM(RTRIM(p.Deductions)) AS decimal(18, 5)) ELSE 0 END AS CleanDeductions,
-        -- New unified value column for warehouse routing
         CASE 
-            WHEN p.SITE LIKE 'WC-W%' THEN 
-                CONCAT(p.ITEMNMBR, ' - ', p.LOT_Number, ' - ', p.Bin) 
-            ELSE NULL 
-        END AS Unified_Value
-    FROM dbo.ETB_PAB_MO p
-    WHERE p.STSDESCR <> 'Partially Received'
-      AND p.STSDESCR <> 'SCRAP'
-      AND LTRIM(RTRIM(p.ITEMNMBR)) NOT LIKE '60.%'
-      AND LTRIM(RTRIM(p.ITEMNMBR)) NOT LIKE '70.%'
+            WHEN ISNUMERIC(LTRIM(RTRIM(p.Deductions))) = 1 THEN CAST(LTRIM(RTRIM(p.Deductions)) AS decimal(18, 5)) 
+            ELSE 0 
+        END AS CleanDeductions
+    FROM 
+        dbo.ETB_PAB_MO p
+    WHERE 
+        p.STSDESCR <> 'Partially Received'
+        AND p.STSDESCR <> 'SCRAP'
+        AND LTRIM(RTRIM(p.ITEMNMBR)) NOT LIKE '60.%'
+        AND LTRIM(RTRIM(p.ITEMNMBR)) NOT LIKE '70.%'
 ),
 
 m_norm AS (
     SELECT
-        m.*,
-        UPPER(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(LTRIM(RTRIM(CONVERT(varchar(255), REPLACE(m.ORDERNUMBER, 'MO', '')))), '-', ''), ' ', ''), '/', ''), '.', ''), '#', '')) AS CleanOrder,
+        m.*, 
+        UPPER(LTRIM(RTRIM(CONVERT(varchar(255), 
+            REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(m.ORDERNUMBER, 'MO', ''), '-', ''), ' ', ''), '/', ''), '.', ''), '#', '')
+        )))) AS CleanOrder,
         ROW_NUMBER() OVER (
-            PARTITION BY UPPER(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(LTRIM(RTRIM(CONVERT(varchar(255), REPLACE(m.ORDERNUMBER, 'MO', '')))), '-', ''), ' ', ''), '/', ''), '.', ''), '#', '')), m.FG
+            PARTITION BY UPPER(LTRIM(RTRIM(CONVERT(varchar(255), 
+                REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(m.ORDERNUMBER, 'MO', ''), '-', ''), ' ', ''), '/', ''), '.', ''), '#', '')
+            )))), m.FG
             ORDER BY m.Customer, m.[FG Desc], m.ORDERNUMBER
         ) AS rn_fg
-    FROM dbo.ETB_ActiveDemand_Union_FG_MO m
+    FROM 
+        dbo.ETB_ActiveDemand_Union_FG_MO m
 ),
 
 item_desc AS (
@@ -33,8 +39,10 @@ item_desc AS (
         [Item Number] AS ItemNumber,
         ITEMDESC AS ItemDescription,
         UOMSCHDL
-    FROM dbo.Prosenthal_Vendor_Items
-    WHERE Active = 'Yes'
+    FROM 
+        dbo.Prosenthal_Vendor_Items
+    WHERE 
+        Active = 'Yes'
 ),
 
 joined AS (
@@ -61,16 +69,19 @@ joined AS (
         p_norm.Expiry AS Original_Expiry,
         p_norm.[PO's] AS Original_POs,
         p_norm.Running_Balance AS Original_Running_Balance,
-        CASE WHEN ISNUMERIC(LTRIM(RTRIM(p_norm.BEG_BAL))) = 1 
-             THEN CAST(LTRIM(RTRIM(p_norm.BEG_BAL)) AS decimal(18, 6)) 
-             ELSE 0 END AS BEG_BAL_Num,
+        CASE 
+            WHEN ISNUMERIC(LTRIM(RTRIM(p_norm.BEG_BAL))) = 1 THEN CAST(LTRIM(RTRIM(p_norm.BEG_BAL)) AS decimal(18, 6)) 
+            ELSE 0 
+        END AS BEG_BAL_Num,
         p_norm.CleanOrder,
         p_norm.CleanItem,
-        p_norm.CleanDeductions,
-        p_norm.Unified_Value
-    FROM p_norm
-    LEFT JOIN m_norm ON p_norm.CleanOrder = m_norm.CleanOrder AND m_norm.rn_fg = 1
-    LEFT JOIN item_desc ON p_norm.ITEMNMBR = item_desc.ItemNumber
+        p_norm.CleanDeductions
+    FROM 
+        p_norm
+    LEFT JOIN 
+        m_norm ON p_norm.CleanOrder = m_norm.CleanOrder AND m_norm.rn_fg = 1
+    LEFT JOIN 
+        item_desc ON p_norm.ITEMNMBR = item_desc.ItemNumber
 ),
 
 ranked AS (
@@ -78,13 +89,16 @@ ranked AS (
         *,
         ROW_NUMBER() OVER (PARTITION BY ORDERNUMBER, FG, ITEMNMBR 
                            ORDER BY Construct, [FG Desc], STSDESCR) AS rn_final
-    FROM joined
+    FROM 
+        joined
 ),
 
 Core AS (
     SELECT *
-    FROM ranked
-    WHERE rn_final = 1
+    FROM 
+        ranked
+    WHERE 
+        rn_final = 1
 ),
 
 ledger_ranked AS (
@@ -102,8 +116,10 @@ ledger_ranked AS (
                            ORDER BY CASE WHEN (a.QTY_ISSUED_I + a.QTY_BACKFLUSHED_I) > 0 THEN 1 ELSE 2 END, 
                                         ABS(a.MRPAMOUNT_I) DESC, 
                                         CAST(a.MRPISSUEDATE_I AS date) DESC) AS rn_any
-    FROM dbo.PK010033 a WITH (NOLOCK)
-    LEFT JOIN dbo.IV00101 b WITH (NOLOCK) ON a.ITEMNMBR = b.ITEMNMBR
+    FROM 
+        dbo.PK010033 a WITH (NOLOCK)
+    LEFT JOIN 
+        dbo.IV00101 b WITH (NOLOCK) ON a.ITEMNMBR = b.ITEMNMBR
     WHERE EXISTS (
         SELECT 1
         FROM dbo.WO010032 w WITH (NOLOCK)
@@ -126,12 +142,19 @@ Final AS (
         CASE WHEN ISNULL(ml.Total_Issued, 0) > 0 
              AND Core.[Date + Expiry] IS NOT NULL 
              AND TRY_CAST(Core.[Date + Expiry] AS date) < DATEADD(DAY, -7, CAST(GETDATE() AS date))
-             THEN 'YES' ELSE 'NO' END AS Early_Issue_Flag
-    FROM Core
-    LEFT JOIN ledger_ranked ml 
-      ON Core.CleanOrder = ml.CleanMO 
-     AND Core.CleanItem = ml.ITEMNMBR 
-     AND ( (Core.CleanDeductions = ml.Required_Qty AND ml.rn_qty = 1) OR ml.rn_any = 1 )
+             THEN 'YES' ELSE 'NO' END AS Early_Issue_Flag,
+        CASE 
+            WHEN ml.Required_Qty IS NULL THEN 
+                CONCAT(Core.ITEMNMBR, ' - ', Core.[Date + Expiry], ' - ', Core.CleanDeductions)
+            ELSE 
+                CONCAT(Core.ITEMNMBR, ' - ', Core.[Date + Expiry], ' - ', ml.Required_Qty - ml.Total_Issued)
+        END AS Unified_Value
+    FROM 
+        Core
+    LEFT JOIN 
+        ledger_ranked ml ON Core.CleanOrder = ml.CleanMO 
+                         AND Core.CleanItem = ml.ITEMNMBR 
+                         AND ((Core.CleanDeductions = ml.Required_Qty AND ml.rn_qty = 1) OR ml.rn_any = 1)
 )
 
 SELECT
@@ -166,4 +189,5 @@ SELECT
     STSDESCR,
     MRPTYPE,
     Unified_Value
-FROM Final;
+FROM 
+    Final;
