@@ -1,0 +1,10 @@
+-- ============================================================================
+-- VIEW: ETB_PAB_WFQ_ADJ
+-- ============================================================================
+-- Role: WFQ pipeline overlay + extended balance
+-- Dependencies: ETB_WC_INV_Unified, ETB_WFQ_PIPE
+-- Status: Reference only - already deployed in SSMS
+-- ============================================================================
+-- Note: This view is already deployed in SSMS. Reference file for documentation
+-- purposes only. Do not redeploy.
+-- ============================================================================

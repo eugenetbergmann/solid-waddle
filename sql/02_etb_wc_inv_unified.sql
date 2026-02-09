@@ -1,0 +1,10 @@
+-- ============================================================================
+-- VIEW: ETB_WC_INV_Unified
+-- ============================================================================
+-- Role: Inventory netting + demand adjustment
+-- Dependencies: ETB_PAB_AUTO
+-- Status: Reference only - already deployed in SSMS
+-- ============================================================================
+-- Note: This view is already deployed in SSMS. Reference file for documentation
+-- purposes only. Do not redeploy.
+-- ============================================================================
