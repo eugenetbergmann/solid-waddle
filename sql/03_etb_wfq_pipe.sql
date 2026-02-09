@@ -1,0 +1,10 @@
+-- ============================================================================
+-- TABLE: ETB_WFQ_PIPE
+-- ============================================================================
+-- Role: WFQ pipeline source data
+-- Columns: ITEM_Number, Estimated_Release_Date, Expected_Delivery_Date, QTY_ON_HAND, View_Level
+-- Status: Reference only - existing table in SSMS
+-- ============================================================================
+-- Note: This table already exists in SSMS. Reference file for documentation
+-- purposes only. Do not recreate.
+-- ============================================================================

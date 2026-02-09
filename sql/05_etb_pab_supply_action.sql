@@ -1,6 +1,16 @@
--- ETB_PAB_SUPPLY_ACTION
--- Evaluates supply adequacy by comparing PO quantity and timing against demand deficit
--- Output: Fully enumerated decision surface with no roll-ups
+-- ============================================================================
+-- VIEW: ETB_PAB_SUPPLY_ACTION
+-- ============================================================================
+-- Role: Final decision surface (supply action recommendations)
+-- Dependencies: ETB_PAB_WFQ_ADJ, ETB_WFQ_PIPE
+-- Status: NEW PRODUCTION CODE - Deploy this view
+-- ============================================================================
+-- Evaluates supply adequacy by comparing PO quantity and timing against 
+-- demand deficit. Output: Fully enumerated decision surface with no roll-ups
+-- ============================================================================
+
+CREATE VIEW [dbo].[ETB_PAB_SUPPLY_ACTION]
+AS
 
 WITH WFQ_Extended AS (
     -- Reference the upstream view output
@@ -207,3 +217,5 @@ SELECT
     Supply_Action_Recommendation,
     Additional_Order_Qty
 FROM Supply_Action_Decision;
+
+GO

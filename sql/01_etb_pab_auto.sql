@@ -1,0 +1,10 @@
+-- ============================================================================
+-- VIEW: ETB_PAB_AUTO
+-- ============================================================================
+-- Role: Foundation demand + inventory suppression
+-- Dependencies: Raw tables (ETB_PAB_MO, ETB_ActiveDemand_Union_FG_MO, etc.)
+-- Status: Reference only - already deployed in SSMS
+-- ============================================================================
+-- Note: This view is already deployed in SSMS. Reference file for documentation
+-- purposes only. Do not redeploy.
+-- ============================================================================
