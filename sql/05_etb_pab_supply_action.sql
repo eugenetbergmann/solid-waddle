@@ -3,17 +3,18 @@
 -- ============================================================================
 -- Role: Final decision surface (supply action recommendations)
 -- Dependencies: ETB_PAB_WFQ_ADJ, ETB_WFQ_PIPE
--- Status: NEW PRODUCTION CODE - Deploy this view
+-- Status: PRODUCTION CODE - Deploy this view
 -- ============================================================================
--- Evaluates supply adequacy by comparing PO quantity and timing against 
--- demand deficit. Output: Fully enumerated decision surface with no roll-ups
+-- Evaluates supply adequacy by comparing PO quantity and timing against
+-- demand deficit. Output: Fully enumerated decision surface with no roll-ups.
+-- EMBEDDED BegBal: Quad-validated ISNUMERIC logic (final layer)
 -- ============================================================================
 
 CREATE VIEW [dbo].[ETB_PAB_SUPPLY_ACTION]
 AS
 
 WITH WFQ_Extended AS (
-    -- Reference the upstream view output
+    -- Select from View 4 with embedded BegBal validation (final layer)
     SELECT
         ITEMNMBR,
         ItemDescription,
@@ -23,7 +24,14 @@ WITH WFQ_Extended AS (
         DUEDATE,
         [Expiry Dates],
         [Date + Expiry],
-        BEG_BAL,
+        -- EMBEDDED BegBal: Quad-validated ISNUMERIC logic (final layer)
+        CAST(
+            CASE 
+                WHEN ISNUMERIC(LTRIM(RTRIM(BEG_BAL))) = 1 
+                    THEN CAST(LTRIM(RTRIM(BEG_BAL)) AS decimal(18, 6))
+                ELSE 0 
+            END AS VARCHAR(50)
+        ) AS BEG_BAL,
         Deductions,
         Expiry,
         [PO's],
@@ -56,7 +64,7 @@ Balance_Analysis AS (
     -- Calculate deficit, POs on order, and demand due date
     SELECT
         *,
-        -- Deficit_Qty: NET 0 if sufficient, else positive shortfall
+        -- Deficit_Qty: 0 if sufficient, else positive shortfall
         CASE 
             WHEN Ledger_Extended_Balance >= Net_Demand THEN 0
             ELSE Net_Demand - Ledger_Extended_Balance
@@ -73,23 +81,18 @@ Balance_Analysis AS (
 ),
 
 WFQ_Turnaround_Analysis AS (
-    -- Extract turn-around timing from pipeline, aggregated by ITEM
-    -- Note: Using Estimated_Release_Date as proxy; assumes Expected_Delivery_Date column exists
+    -- Extract turn-around timing from WFQ pipeline, aggregated by ITEM
     SELECT 
         ITEM_Number AS ITEMNMBR,
         Estimated_Release_Date,
+        Expected_Delivery_Date,
         -- Calculate turn-around days from release to expected delivery
-        -- Using PURCHASING_LT as turn-around proxy since Expected_Delivery_Date may vary
-        CASE 
-            WHEN Estimated_Release_Date IS NOT NULL 
-                 AND Estimated_Release_Date >= CAST(GETDATE() AS DATE) 
-                 THEN DATEDIFF(DAY, CAST(GETDATE() AS DATE), Estimated_Release_Date)
-            ELSE 0
-        END AS PO_Turn_Around_Days,
-        -- For PO_Actual_Arrival_Date: use Estimated_Release_Date directly when available
-        Estimated_Release_Date AS PO_Actual_Arrival_Date
+        DATEDIFF(DAY, Estimated_Release_Date, Expected_Delivery_Date) AS Turn_Around_Days,
+        -- WFQ actual arrival date is the expected delivery date
+        Expected_Delivery_Date AS WFQ_Actual_Arrival_Date
     FROM dbo.ETB_WFQ_PIPE
     WHERE View_Level = 'ITEM_LEVEL'
+      AND QTY_ON_HAND > 0
 ),
 
 PO_Timing_Analysis AS (
@@ -97,14 +100,14 @@ PO_Timing_Analysis AS (
     SELECT 
         b.*,
         -- Get timing columns from WFQ pipeline (LEFT JOIN to preserve all demand rows)
-        t.PO_Turn_Around_Days,
-        t.PO_Actual_Arrival_Date,
         t.Estimated_Release_Date AS PO_Release_Date,
+        t.Turn_Around_Days AS PO_Turn_Around_Days,
+        t.WFQ_Actual_Arrival_Date AS PO_Actual_Arrival_Date,
         -- PO_On_Time: 1 if actual arrival <= demand due date, else 0
         CASE 
-            WHEN t.PO_Actual_Arrival_Date IS NOT NULL 
+            WHEN t.WFQ_Actual_Arrival_Date IS NOT NULL 
                  AND b.Demand_Due_Date IS NOT NULL 
-                 AND t.PO_Actual_Arrival_Date <= b.Demand_Due_Date THEN 1
+                 AND t.WFQ_Actual_Arrival_Date <= b.Demand_Due_Date THEN 1
             ELSE 0
         END AS PO_On_Time,
         -- Is_Past_Due_In_Backlog: 1 if demand due date < today, else 0
@@ -115,7 +118,7 @@ PO_Timing_Analysis AS (
         END AS Is_Past_Due_In_Backlog
     FROM Balance_Analysis b
     LEFT JOIN WFQ_Turnaround_Analysis t
-           ON b.ITEMNMBR = t.ITEMNMBR
+        ON b.ITEMNMBR = t.ITEMNMBR
 ),
 
 Supply_Action_Decision AS (
