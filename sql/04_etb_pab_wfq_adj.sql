@@ -1,171 +1,41 @@
--- ============================================================================
--- VIEW: ETB_PAB_WFQ_ADJ
--- ============================================================================
--- Role: WFQ pipeline overlay + extended balance
--- Dependencies: ETB_WC_INV_Unified, ETB_WFQ_PIPE
--- Status: PRODUCTION CODE - Deploy this view
--- ============================================================================
--- Calculates WFQ supply aggregation, stockout detection, and extended ledger
--- with WFQ influx. EMBEDDED BegBal: Triple-validated ISNUMERIC logic
--- ============================================================================
-
-CREATE VIEW [dbo].[ETB_PAB_WFQ_ADJ]
-AS
-
-WITH Demand_Ledger AS (
-    -- Select from View 2 with embedded BegBal validation
-    SELECT
-        ITEMNMBR,
-        ItemDescription,
-        UOM,
-        ORDERNUMBER,
-        Construct,
-        DUEDATE,
-        [Expiry Dates],
-        [Date + Expiry],
-        -- EMBEDDED BegBal: Triple-validated ISNUMERIC logic
-        CAST(
-            CASE 
-                WHEN ISNUMERIC(LTRIM(RTRIM(BEG_BAL))) = 1 
-                    THEN CAST(LTRIM(RTRIM(BEG_BAL)) AS decimal(18, 6))
-                ELSE 0 
-            END AS VARCHAR(50)
-        ) AS BEG_BAL,
-        Deductions,
-        Expiry,
-        [PO's],
-        Running_Balance,
-        MRP_IssueDate,
-        WCID_From_MO,
-        Issued,
-        Original_Required,
-        Net_Demand,
-        Inventory_Qty_Available,
-        Suppression_Status,
-        VendorItem,
-        PRIME_VNDR,
-        PURCHASING_LT,
-        PLANNING_LT,
-        ORDER_POINT_QTY,
-        SAFETY_STOCK,
-        FG,
-        [FG Desc],
-        STSDESCR,
-        MRPTYPE,
-        Unified_Value
-    FROM dbo.ETB_WC_INV_Unified
-),
-
-Demand_Seq AS (
-    -- Assign sequence numbers per item by due date
-    SELECT
-        *,
-        ROW_NUMBER() OVER (
-            PARTITION BY ITEMNMBR
-            ORDER BY DUEDATE ASC, ORDERNUMBER ASC
-        ) AS Demand_Seq
-    FROM Demand_Ledger
-),
-
-Stockout_Detection AS (
-    -- Find the first demand sequence where running balance goes <= 0
-    SELECT
-        ITEMNMBR,
-        MIN(Demand_Seq) AS Stockout_Seq
-    FROM Demand_Seq
-    WHERE TRY_CAST(Running_Balance AS decimal(18, 6)) <= 0
-       OR Running_Balance IS NULL
-    GROUP BY ITEMNMBR
-),
-
-WFQ_Supply AS (
-    -- Aggregate WFQ supply from ETB_WFQ_PIPE
-    SELECT
-        ITEM_Number AS ITEMNMBR,
-        Estimated_Release_Date,
-        Expected_Delivery_Date,
-        SUM(QTY_ON_HAND) AS WFQ_Qty_Available
-    FROM dbo.ETB_WFQ_PIPE
-    WHERE View_Level = 'ITEM_LEVEL'
-      AND QTY_ON_HAND > 0
-    GROUP BY ITEM_Number, Estimated_Release_Date, Expected_Delivery_Date
-),
-
-WFQ_Allocated AS (
-    -- Allocate WFQ supply to demand rows
-    -- WFQ supply counts if Expected_Delivery_Date <= Demand_DUEDATE
-    SELECT
-        ds.*,
-        sd.Stockout_Seq,
-        ISNULL(
-            (SELECT SUM(w.WFQ_Qty_Available)
-             FROM WFQ_Supply w
-             WHERE w.ITEMNMBR = ds.ITEMNMBR
-               AND w.Expected_Delivery_Date <= ds.DUEDATE
-               AND ds.Demand_Seq >= ISNULL(sd.Stockout_Seq, ds.Demand_Seq)
-            ), 0
-        ) AS WFQ_Influx
-    FROM Demand_Seq ds
-    LEFT JOIN Stockout_Detection sd
-        ON ds.ITEMNMBR = sd.ITEMNMBR
-),
-
-Extended_Ledger AS (
-    -- Calculate extended balance and status
-    SELECT
-        *,
-        -- Ledger_Extended_Balance = Running_Balance + WFQ_Influx
-        TRY_CAST(Running_Balance AS decimal(18, 6)) + WFQ_Influx AS Ledger_Extended_Balance,
-        -- WFQ_Extended_Status classification
-        CASE
-            WHEN WFQ_Influx <= 0 THEN 'LEDGER_ONLY'
-            WHEN (TRY_CAST(Running_Balance AS decimal(18, 6)) + WFQ_Influx) > 0
-                 AND (TRY_CAST(Running_Balance AS decimal(18, 6)) <= 0)
-            THEN 'WFQ_RESCUED'
-            WHEN (TRY_CAST(Running_Balance AS decimal(18, 6)) + WFQ_Influx) > 0
-            THEN 'WFQ_ENHANCED'
-            ELSE 'WFQ_INSUFFICIENT'
-        END AS WFQ_Extended_Status
-    FROM WFQ_Allocated
-)
-
--- Final output
-SELECT
-    ITEMNMBR,
-    ItemDescription,
-    UOM,
-    ORDERNUMBER,
-    Construct,
-    DUEDATE,
-    [Expiry Dates],
-    [Date + Expiry],
-    BEG_BAL,
-    Deductions,
-    Expiry,
-    [PO's],
-    Running_Balance,
-    MRP_IssueDate,
-    WCID_From_MO,
-    Issued,
-    Original_Required,
-    Net_Demand,
-    Inventory_Qty_Available,
-    Suppression_Status,
-    VendorItem,
-    PRIME_VNDR,
-    PURCHASING_LT,
-    PLANNING_LT,
-    ORDER_POINT_QTY,
-    SAFETY_STOCK,
-    FG,
-    [FG Desc],
-    STSDESCR,
-    MRPTYPE,
-    Unified_Value,
-    -- WFQ extended columns
-    WFQ_Influx AS Ledger_WFQ_Influx,
-    Ledger_Extended_Balance,
-    WFQ_Extended_Status
-FROM Extended_Ledger;
-
-GO
+/* Carry forward EVERYTHING exactly as ETB_WC_INV_Unified already computed it
+       (which itself carries the PAB_AUTO BEG BAL + deduction/PO/expiry impacts into Running_Balance),
+       plus the suppression fields + adjusted RB. */ SELECT
+                          ITEMNMBR, ItemDescription, UOM, ORDERNUMBER, Construct, DUEDATE, [Expiry Dates], [Date + Expiry], BEG_BAL, Deductions, Expiry, [PO's], Running_Balance, Adjusted_Running_Balance, MRP_IssueDate, 
+                         WCID_From_MO, Issued, Remaining AS Original_Required, Net_Demand, Inventory_Qty_Available, Demand_Status AS Suppression_Status, Is_Suppressed, Has_Issued, IssueDate_Mismatch, Early_Issue_Flag, VendorItem, 
+                         PRIME_VNDR, PURCHASING_LT, PLANNING_LT, ORDER_POINT_QTY, SAFETY_STOCK, FG, [FG Desc], STSDESCR, MRPTYPE, Unified_Value
+FROM            dbo.ETB_WC_INV_Unified), /* Keep BEG BAL + ALL non-demand ledger rows intact.
+   Only build a demand sequence for rows that actually consume demand (so stockout detection isn't distorted). */ DemandRowsOnly AS
+    (SELECT        *
+      FROM            Demand_Ledger
+      WHERE        LTRIM(RTRIM(ORDERNUMBER)) <> 'Beg Bal' AND DUEDATE IS NOT NULL /* demand-like rows: keep these broad unless you have a clean MRPTYPE/STSDESCR filter */ AND ISNULL(Original_Required, 0) <> 0), 
+Demand_Seq AS
+    (SELECT        d .*, ROW_NUMBER() OVER (PARTITION BY d .ITEMNMBR
+      ORDER BY d .DUEDATE, d .ORDERNUMBER, COALESCE (d .Unified_Value, '')) AS Demand_Seq
+FROM            DemandRowsOnly d), Stockout_Detection AS
+    (/* Threshold uses the adjusted ledger so suppression is respected */ SELECT ds.*, MIN(CASE WHEN ds.Adjusted_Running_Balance <= 0 THEN ds.Demand_Seq END) OVER (PARTITION BY ds.ITEMNMBR) AS Stockout_Seq
+      FROM            Demand_Seq ds), WFQ_Supply AS
+    (/* WFQ supply sources */ SELECT ITEM_Number AS ITEMNMBR, SITE, SUM(QTY_ON_HAND) AS WFQ_Qty, Estimated_Release_Date
+      FROM            dbo.ETB_WFQ_PIPE
+      WHERE        View_Level = 'ITEM_LEVEL' AND QTY_ON_HAND > 0
+      GROUP BY ITEM_Number, SITE, Estimated_Release_Date), WFQ_Allocated AS
+    (/* Allocate all WFQ qty that releases by each demand due date, only after stockout begins */ SELECT d .ITEMNMBR, d .Demand_Seq, d .DUEDATE, d .Adjusted_Running_Balance AS Ledger_Base_Balance, d .Stockout_Seq, 
+                                SUM(CASE WHEN d .Stockout_Seq IS NOT NULL AND d .Demand_Seq >= d .Stockout_Seq AND w.Estimated_Release_Date <= d .DUEDATE THEN w.WFQ_Qty ELSE 0 END) AS Ledger_WFQ_Influx
+      FROM            Stockout_Detection d LEFT JOIN
+                                WFQ_Supply w ON d .ITEMNMBR = w.ITEMNMBR
+      GROUP BY d .ITEMNMBR, d .Demand_Seq, d .DUEDATE, d .Adjusted_Running_Balance, d .Stockout_Seq), Extended_Demand AS
+    (/* Add WFQ overlay columns onto demand rows */ SELECT d .*, ISNULL(w.Ledger_WFQ_Influx, 0) AS Ledger_WFQ_Influx, d .Adjusted_Running_Balance + ISNULL(w.Ledger_WFQ_Influx, 0) AS Ledger_Extended_Balance, 
+                                CASE WHEN ISNULL(w.Ledger_WFQ_Influx, 0) <= 0 THEN 'LEDGER_ONLY' WHEN d .Adjusted_Running_Balance <= 0 AND (d .Adjusted_Running_Balance + ISNULL(w.Ledger_WFQ_Influx, 0)) 
+                                > 0 THEN 'WFQ_RESCUED' WHEN (d .Adjusted_Running_Balance + ISNULL(w.Ledger_WFQ_Influx, 0)) > 0 THEN 'WFQ_ENHANCED' ELSE 'WFQ_INSUFFICIENT' END AS WFQ_Extended_Status
+      FROM            Stockout_Detection d LEFT JOIN
+                                WFQ_Allocated w ON d .ITEMNMBR = w.ITEMNMBR AND d .Demand_Seq = w.Demand_Seq), 
+/* Re-attach the WFQ overlay onto the FULL ledger so BEG_BAL + PO + expiry + all PAB deduction logic carries forward unchanged */ Final_Ledger AS
+    (SELECT        l.*, /* overlay columns populated only for sequenced demand rows; else 0/NULL */ ISNULL(ed.Ledger_WFQ_Influx, 0) AS Ledger_WFQ_Influx, CASE WHEN ed.ITEMNMBR IS NULL THEN NULL 
+                                ELSE ed.Ledger_Extended_Balance END AS Ledger_Extended_Balance, CASE WHEN LTRIM(RTRIM(l.ORDERNUMBER)) = 'Beg Bal' THEN 'BEGINNING BALANCE' WHEN ed.ITEMNMBR IS NULL 
+                                THEN 'NON_DEMAND_LEDGER_ROW' ELSE ed.WFQ_Extended_Status END AS WFQ_Extended_Status
+      FROM            Demand_Ledger l LEFT JOIN
+                                Extended_Demand ed ON l.ITEMNMBR = ed.ITEMNMBR AND l.DUEDATE = ed.DUEDATE AND l.ORDERNUMBER = ed.ORDERNUMBER AND COALESCE (l.Unified_Value, '') = COALESCE (ed.Unified_Value, ''))
+    SELECT        ITEMNMBR, ItemDescription, UOM, ORDERNUMBER, Construct, DUEDATE, [Expiry Dates], [Date + Expiry], BEG_BAL, Deductions, Expiry, [PO's], Running_Balance, Adjusted_Running_Balance, MRP_IssueDate, 
+                              WCID_From_MO, Issued, Original_Required, Net_Demand, Inventory_Qty_Available, Suppression_Status, VendorItem, PRIME_VNDR, PURCHASING_LT, PLANNING_LT, ORDER_POINT_QTY, SAFETY_STOCK, FG, [FG Desc], 
+                              STSDESCR, MRPTYPE, Unified_Value, /* WFQ overlay columns */ Ledger_WFQ_Influx, Ledger_Extended_Balance, WFQ_Extended_Status
+     FROM            Final_Ledger;
