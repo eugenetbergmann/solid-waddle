@@ -1,10 +1,8 @@
--- ============================================================================
--- TABLE: ETB_WFQ_PIPE
--- ============================================================================
--- Role: WFQ pipeline source data
--- Columns: ITEM_Number, Estimated_Release_Date, Expected_Delivery_Date, QTY_ON_HAND, View_Level
--- Status: Reference only - existing table in SSMS
--- ============================================================================
--- Note: This table already exists in SSMS. Reference file for documentation
--- purposes only. Do not recreate.
--- ============================================================================
+SELECT        'ITEM_LEVEL' AS View_Level, TRIM(dbo.IV00300.ITEMNMBR) AS Item_Number, TRIM(dbo.IV00300.LOCNCODE) AS SITE, TRIM(dbo.IV00300.LOTNUMBR) AS LOT_Number, dbo.IV00300.EXPNDATE, 
+                         TRIM(dbo.IV00101.UOMSCHDL) AS UOM, SUM(dbo.IV00300.QTYRECVD - dbo.IV00300.QTYSOLD) AS QTY_ON_HAND, LEFT(TRIM(dbo.IV00300.ITEMNMBR), 2) AS Series, CASE WHEN LEFT(TRIM(dbo.IV00300.ITEMNMBR), 2) 
+                         = '10' THEN 21 ELSE 14 END AS SOP_Target_Days, DATEDIFF(DAY, dbo.IV00300.DATERECD, GETDATE()) AS Lot_Age_Days, DATEADD(DAY, CASE WHEN LEFT(TRIM(dbo.IV00300.ITEMNMBR), 2) = '10' THEN 21 ELSE 14 END, 
+                         GETDATE()) AS Estimated_Release_Date, CASE WHEN dbo.IV00300.EXPNDATE > DATEADD(DAY, 90, GETDATE()) THEN 1 ELSE 0 END AS Valid_Expiration
+FROM            dbo.IV00300 LEFT OUTER JOIN
+                         dbo.IV00101 ON dbo.IV00300.ITEMNMBR = dbo.IV00101.ITEMNMBR
+WHERE        (dbo.IV00300.QTYRECVD - dbo.IV00300.QTYSOLD <> 0) AND (TRIM(dbo.IV00300.LOCNCODE) IN ('WF-Q', 'UNDERINV')) AND (DATEDIFF(DAY, dbo.IV00300.DATERECD, GETDATE()) <= 65)
+GROUP BY TRIM(dbo.IV00300.ITEMNMBR), TRIM(dbo.IV00300.LOCNCODE), TRIM(dbo.IV00300.LOTNUMBR), dbo.IV00300.EXPNDATE, TRIM(dbo.IV00101.UOMSCHDL), dbo.IV00300.DATERECD
