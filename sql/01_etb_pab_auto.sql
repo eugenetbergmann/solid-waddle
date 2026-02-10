@@ -1,309 +1,50 @@
-WITH ItemSpine AS (
-    SELECT ITEMNMBR FROM dbo.ETB_PAB_MO
-    UNION
-    SELECT ITEMNMBR FROM dbo.Prosenthal_Vendor_Items
-    UNION
-    SELECT ITEMNMBR FROM dbo.ETB_ActiveDemand_Union_FG_MO
-),
-CleanData AS (
-    SELECT
-        LTRIM(RTRIM(mo.ITEMNMBR)) AS ITEMNMBR,
-        LTRIM(RTRIM(mo.ITEMDESC)) AS ItemDescription,
-        LTRIM(RTRIM(mo.UOFM)) AS UOM,
-        LTRIM(RTRIM(mo.ORDERNUMBER)) AS ORDERNUMBER,
-        LTRIM(RTRIM(mo.Construct)) AS Construct,
-        mo.DUEDATE,
-        mo.[Expiry Dates],
-        mo.[Date + Expiry],
-        TRY_CAST(NULLIF(LTRIM(RTRIM(mo.BEG_BAL)), '') AS decimal(18,6)) AS BEG_BAL,
-        mo.Deductions,
-        mo.Expiry,
-        mo.[PO's],
-        mo.Running_Balance,
-        mo.MRP_IssueDate,
-        mo.WCID_From_MO,
-        mo.Issued,
-        mo.Remaining AS Original_Required,
-        mo.Has_Issued,
-        mo.IssueDate_Mismatch,
-        mo.Early_Issue_Flag,
-        REPLACE(LTRIM(RTRIM(mo.ORDERNUMBER)), '-', '') AS CleanOrder,
-        REPLACE(LTRIM(RTRIM(mo.ITEMNMBR)), '-', '') AS CleanItem
-    FROM dbo.ETB_PAB_MO mo
-),
-ActiveDemandJoin AS (
-    SELECT
-        cd.ITEMNMBR,
-        cd.ItemDescription,
-        cd.UOM,
-        cd.ORDERNUMBER,
-        cd.Construct,
-        cd.DUEDATE,
-        cd.[Expiry Dates],
-        cd.[Date + Expiry],
-        cd.BEG_BAL,
-        cd.Deductions,
-        cd.Expiry,
-        cd.[PO's],
-        cd.Running_Balance,
-        cd.MRP_IssueDate,
-        cd.WCID_From_MO,
-        cd.Issued,
-        cd.Original_Required,
-        cd.Has_Issued,
-        cd.IssueDate_Mismatch,
-        cd.Early_Issue_Flag,
-        cd.CleanOrder,
-        cd.CleanItem,
-        ad.FG,
-        ad.[FG Desc],
-        ad.STSDESCR,
-        ad.MRPTYPE
-    FROM CleanData cd
-    LEFT JOIN dbo.ETB_ActiveDemand_Union_FG_MO ad
-        ON cd.CleanOrder = REPLACE(LTRIM(RTRIM(ad.ORDERNUMBER)), '-', '')
-        AND cd.CleanItem = REPLACE(LTRIM(RTRIM(ad.ITEMNMBR)), '-', '')
-),
-VendorItemJoin AS (
-    SELECT
-        adj.ITEMNMBR,
-        adj.ItemDescription,
-        adj.UOM,
-        adj.ORDERNUMBER,
-        adj.Construct,
-        adj.DUEDATE,
-        adj.[Expiry Dates],
-        adj.[Date + Expiry],
-        adj.BEG_BAL,
-        adj.Deductions,
-        adj.Expiry,
-        adj.[PO's],
-        adj.Running_Balance,
-        adj.MRP_IssueDate,
-        adj.WCID_From_MO,
-        adj.Issued,
-        adj.Original_Required,
-        adj.Has_Issued,
-        adj.IssueDate_Mismatch,
-        adj.Early_Issue_Flag,
-        adj.CleanOrder,
-        adj.CleanItem,
-        adj.FG,
-        adj.[FG Desc],
-        adj.STSDESCR,
-        adj.MRPTYPE,
-        vi.VendorItem,
-        vi.PRIME_VNDR,
-        vi.PURCHASING_LT,
-        vi.PLANNING_LT,
-        vi.ORDER_POINT_QTY,
-        vi.SAFETY_STOCK
-    FROM ActiveDemandJoin adj
-    LEFT JOIN dbo.Prosenthal_Vendor_Items vi
-        ON adj.ITEMNMBR = vi.ITEMNMBR
-),
-RankedData AS (
-    SELECT
-        ITEMNMBR,
-        ItemDescription,
-        UOM,
-        ORDERNUMBER,
-        Construct,
-        DUEDATE,
-        [Expiry Dates],
-        [Date + Expiry],
-        BEG_BAL,
-        Deductions,
-        Expiry,
-        [PO's],
-        Running_Balance,
-        MRP_IssueDate,
-        WCID_From_MO,
-        Issued,
-        Original_Required,
-        Has_Issued,
-        IssueDate_Mismatch,
-        Early_Issue_Flag,
-        CleanOrder,
-        CleanItem,
-        FG,
-        [FG Desc],
-        STSDESCR,
-        MRPTYPE,
-        VendorItem,
-        PRIME_VNDR,
-        PURCHASING_LT,
-        PLANNING_LT,
-        ORDER_POINT_QTY,
-        SAFETY_STOCK,
-        ROW_NUMBER() OVER (
-            PARTITION BY ORDERNUMBER, FG, ITEMNMBR
-            ORDER BY DUEDATE ASC, MRP_IssueDate ASC
-        ) AS rn
-    FROM VendorItemJoin
-),
-LedgerMatch AS (
-    SELECT
-        r.ITEMNMBR,
-        r.ItemDescription,
-        r.UOM,
-        r.ORDERNUMBER,
-        r.Construct,
-        r.DUEDATE,
-        r.[Expiry Dates],
-        r.[Date + Expiry],
-        r.BEG_BAL,
-        r.Deductions,
-        r.Expiry,
-        r.[PO's],
-        r.Running_Balance,
-        r.MRP_IssueDate,
-        r.WCID_From_MO,
-        r.Issued,
-        r.Original_Required,
-        r.Has_Issued,
-        r.IssueDate_Mismatch,
-        r.Early_Issue_Flag,
-        r.CleanOrder,
-        r.CleanItem,
-        r.FG,
-        r.[FG Desc],
-        r.STSDESCR,
-        r.MRPTYPE,
-        r.VendorItem,
-        r.PRIME_VNDR,
-        r.PURCHASING_LT,
-        r.PLANNING_LT,
-        r.ORDER_POINT_QTY,
-        r.SAFETY_STOCK,
-        pk.IssueDate AS Ledger_IssueDate,
-        pk.QtyIssued AS Ledger_QtyIssued
-    FROM RankedData r
-    LEFT JOIN dbo.PK010033 pk
-        ON r.CleanOrder = REPLACE(LTRIM(RTRIM(pk.ORDERNUMBER)), '-', '')
-        AND r.CleanItem = REPLACE(LTRIM(RTRIM(pk.ITEMNMBR)), '-', '')
-    WHERE r.rn = 1
-),
-FoundationLedger AS (
-    SELECT
-        sp.ITEMNMBR AS Spine_ITEMNMBR,
-        lm.ITEMNMBR,
-        lm.ItemDescription,
-        lm.UOM,
-        lm.ORDERNUMBER,
-        lm.Construct,
-        lm.DUEDATE,
-        lm.[Expiry Dates],
-        lm.[Date + Expiry],
-        lm.BEG_BAL AS Raw_BEG_BAL,
-        lm.Deductions,
-        lm.Expiry,
-        lm.[PO's],
-        lm.Running_Balance,
-        lm.MRP_IssueDate,
-        lm.WCID_From_MO,
-        lm.Issued,
-        lm.Original_Required,
-        lm.Has_Issued,
-        lm.IssueDate_Mismatch,
-        lm.Early_Issue_Flag,
-        lm.CleanOrder,
-        lm.CleanItem,
-        lm.FG,
-        lm.[FG Desc],
-        lm.STSDESCR,
-        lm.MRPTYPE,
-        lm.VendorItem,
-        lm.PRIME_VNDR,
-        lm.PURCHASING_LT,
-        lm.PLANNING_LT,
-        lm.ORDER_POINT_QTY,
-        lm.SAFETY_STOCK,
-        lm.Ledger_IssueDate,
-        lm.Ledger_QtyIssued
-    FROM ItemSpine sp
-    LEFT JOIN LedgerMatch lm
-        ON sp.ITEMNMBR = lm.ITEMNMBR
-),
-FinalOutput AS (
-    SELECT
-        Spine_ITEMNMBR AS ITEMNMBR,
-        ItemDescription,
-        UOM,
-        ORDERNUMBER,
-        Construct,
-        DUEDATE,
-        [Expiry Dates],
-        [Date + Expiry],
-        ISNULL(Raw_BEG_BAL, 0) AS BEG_BAL,
-        Deductions,
-        Expiry,
-        [PO's],
-        Running_Balance,
-        MRP_IssueDate,
-        WCID_From_MO,
-        Issued,
-        Original_Required,
-        Has_Issued,
-        IssueDate_Mismatch,
-        Early_Issue_Flag,
-        CleanOrder,
-        CleanItem,
-        FG,
-        [FG Desc],
-        STSDESCR,
-        MRPTYPE,
-        VendorItem,
-        PRIME_VNDR,
-        PURCHASING_LT,
-        PLANNING_LT,
-        ORDER_POINT_QTY,
-        SAFETY_STOCK,
-        Ledger_IssueDate,
-        Ledger_QtyIssued,
-        CONCAT(
-            Spine_ITEMNMBR,
-            '|',
-            [Date + Expiry],
-            '|',
-            CAST((ISNULL(Original_Required, 0) - ISNULL(Issued, 0)) AS VARCHAR(50))
-        ) AS Unified_Value
-    FROM FoundationLedger
-)
-SELECT
-    ITEMNMBR,
-    ItemDescription,
-    UOM,
-    ORDERNUMBER,
-    Construct,
-    DUEDATE,
-    [Expiry Dates],
-    [Date + Expiry],
-    BEG_BAL,
-    Deductions,
-    Expiry,
-    [PO's],
-    Running_Balance,
-    MRP_IssueDate,
-    WCID_From_MO,
-    Issued,
-    Original_Required,
-    Has_Issued,
-    IssueDate_Mismatch,
-    Early_Issue_Flag,
-    CleanOrder,
-    CleanItem,
-    FG,
-    [FG Desc],
-    STSDESCR,
-    MRPTYPE,
-    VendorItem,
-    PRIME_VNDR,
-    PURCHASING_LT,
-    PLANNING_LT,
-    ORDER_POINT_QTY,
-    SAFETY_STOCK,
-    Ledger_IssueDate,
-    Ledger_QtyIssued,
-    Unified_Value
-FROM FinalOutput;
+SELECT        p.*, UPPER(LTRIM(RTRIM(CONVERT(varchar(255), REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(p.ORDERNUMBER, 'MO', ''), '-', ''), ' ', ''), '/', ''), '.', ''), '#', ''))))) AS CleanOrder, LTRIM(RTRIM(p.ITEMNMBR)) 
+                         AS CleanItem, CASE WHEN ISNUMERIC(LTRIM(RTRIM(p.Deductions))) = 1 THEN CAST(LTRIM(RTRIM(p.Deductions)) AS decimal(18, 5)) ELSE 0 END AS CleanDeductions
+FROM            dbo.ETB_PAB_MO p
+WHERE        p.STSDESCR <> 'Partially Received' AND p.STSDESCR <> 'SCRAP' AND LTRIM(RTRIM(p.ITEMNMBR)) NOT LIKE '60.%' AND LTRIM(RTRIM(p.ITEMNMBR)) NOT LIKE '70.%'), m_norm AS
+    (SELECT        m.*, UPPER(LTRIM(RTRIM(CONVERT(varchar(255), REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(m.ORDERNUMBER, 'MO', ''), '-', ''), ' ', ''), '/', ''), '.', ''), '#', ''))))) AS CleanOrder, ROW_NUMBER() 
+                                OVER (PARTITION BY UPPER(LTRIM(RTRIM(CONVERT(varchar(255), REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(m.ORDERNUMBER, 'MO', ''), '-', ''), ' ', ''), '/', ''), '.', ''), '#', ''))))), m.FG
+      ORDER BY m.Customer, m.[FG Desc], m.ORDERNUMBER) AS rn_fg
+FROM            dbo.ETB_ActiveDemand_Union_FG_MO m), item_desc AS
+    (SELECT        [Item Number] AS ItemNumber, ITEMDESC AS ItemDescription, UOMSCHDL
+      FROM            dbo.Prosenthal_Vendor_Items
+      WHERE        Active = 'Yes'), joined AS
+    (SELECT        CAST(COALESCE (NULLIF (LTRIM(RTRIM(p_norm.ORDERNUMBER)), ''), NULLIF (LTRIM(RTRIM(m_norm.ORDERNUMBER)), ''), '') AS varchar(255)) AS ORDERNUMBER, CAST(ISNULL(m_norm.Customer, '') AS varchar(255)) 
+                                AS Construct, CAST(ISNULL(m_norm.FG, '') AS varchar(255)) AS FG, CAST(ISNULL(m_norm.[FG Desc], '') AS varchar(255)) AS [FG Desc], CAST(ISNULL(p_norm.ITEMNMBR, '') AS varchar(255)) AS ITEMNMBR, 
+                                CAST(ISNULL(item_desc.ItemDescription, '') AS varchar(500)) AS ItemDescription, CAST(ISNULL(item_desc.UOMSCHDL, '') AS varchar(50)) AS UOMSCHDL, p_norm.STSDESCR, p_norm.DUEDATE, p_norm.[Expiry Dates], 
+                                p_norm.[Date + Expiry], p_norm.MRPTYPE, p_norm.VendorItem, p_norm.PRIME_VNDR, p_norm.PURCHASING_LT, p_norm.PLANNING_LT, p_norm.ORDER_POINT_QTY, p_norm.SAFETY_STOCK, 
+                                p_norm.Deductions AS Original_Deductions, p_norm.Expiry AS Original_Expiry, p_norm.[PO's] AS Original_POs, p_norm.Running_Balance AS Original_Running_Balance, 
+                                CASE WHEN ISNUMERIC(LTRIM(RTRIM(p_norm.BEG_BAL))) = 1 THEN CAST(LTRIM(RTRIM(p_norm.BEG_BAL)) AS decimal(18, 6)) ELSE 0 END AS BEG_BAL_Num, p_norm.CleanOrder, p_norm.CleanItem, 
+                                p_norm.CleanDeductions
+      FROM            p_norm LEFT JOIN
+                                m_norm ON p_norm.CleanOrder = m_norm.CleanOrder AND m_norm.rn_fg = 1 LEFT JOIN
+                                item_desc ON p_norm.ITEMNMBR = item_desc.ItemNumber), ranked AS
+    (SELECT        *, ROW_NUMBER() OVER (PARTITION BY ORDERNUMBER, FG, ITEMNMBR
+      ORDER BY Construct, [FG Desc], STSDESCR) AS rn_final
+FROM            joined), Core AS
+    (SELECT        *
+      FROM            ranked
+      WHERE        rn_final = 1), ledger_ranked AS
+    (SELECT        RTRIM(LTRIM(a.MANUFACTUREORDER_I)) AS CleanMO, RTRIM(LTRIM(a.ITEMNMBR)) AS ITEMNMBR, CAST(a.MRPISSUEDATE_I AS date) AS MRP_IssueDate, a.WCID_I, 
+                                a.QTY_ISSUED_I + a.QTY_BACKFLUSHED_I AS Total_Issued, a.MRPAMOUNT_I - a.ATYALLOC - a.QTY_ISSUED_I - a.QTY_BACKFLUSHED_I AS Remaining_Required, a.MRPAMOUNT_I AS Required_Qty, ROW_NUMBER() 
+                                OVER (PARTITION BY RTRIM(LTRIM(a.MANUFACTUREORDER_I)), RTRIM(LTRIM(a.ITEMNMBR)), a.MRPAMOUNT_I
+      ORDER BY CAST(a.MRPISSUEDATE_I AS date) DESC) AS rn_qty, ROW_NUMBER() OVER (PARTITION BY RTRIM(LTRIM(a.MANUFACTUREORDER_I)), RTRIM(LTRIM(a.ITEMNMBR))
+ORDER BY CASE WHEN (a.QTY_ISSUED_I + a.QTY_BACKFLUSHED_I) > 0 THEN 1 ELSE 2 END, ABS(a.MRPAMOUNT_I) DESC, CAST(a.MRPISSUEDATE_I AS date) DESC) AS rn_any
+FROM            dbo.PK010033 a WITH (NOLOCK) LEFT JOIN
+                         dbo.IV00101 b WITH (NOLOCK) ON a.ITEMNMBR = b.ITEMNMBR
+WHERE        EXISTS
+                             (SELECT        1
+                               FROM            dbo.WO010032 w WITH (NOLOCK)
+                               WHERE        w.MANUFACTUREORDERST_I IN (2, 3) AND RTRIM(LTRIM(w.MANUFACTUREORDER_I)) = RTRIM(LTRIM(a.MANUFACTUREORDER_I)))), Final AS
+    (SELECT        Core.*, ISNULL(ml.MRP_IssueDate, '') AS MRP_IssueDate, ISNULL(ml.WCID_I, '') AS WCID_From_MO, ISNULL(ml.Total_Issued, 0) AS Issued, ISNULL(ml.Remaining_Required, 0) AS Remaining, 
+                                CASE WHEN ISNULL(ml.Total_Issued, 0) > 0 THEN 'YES' ELSE 'NO' END AS Has_Issued, CASE WHEN ml.MRP_IssueDate IS NULL OR
+                                Core.[Date + Expiry] IS NULL THEN 'NO' WHEN ml.MRP_IssueDate <> TRY_CAST(Core.[Date + Expiry] AS date) THEN 'YES' ELSE 'NO' END AS IssueDate_Mismatch, CASE WHEN ISNULL(ml.Total_Issued, 0) > 0 AND 
+                                Core.[Date + Expiry] IS NOT NULL AND TRY_CAST(Core.[Date + Expiry] AS date) < DATEADD(DAY, - 7, CAST(GETDATE() AS date)) THEN 'YES' ELSE 'NO' END AS Early_Issue_Flag, CASE WHEN ml.Required_Qty IS NULL 
+                                THEN CONCAT(Core.ITEMNMBR, ' - ', Core.[Date + Expiry], ' - ', Core.CleanDeductions) ELSE CONCAT(Core.ITEMNMBR, ' - ', Core.[Date + Expiry], ' - ', ml.Required_Qty - ml.Total_Issued) END AS Unified_Value
+      FROM            Core LEFT JOIN
+                                ledger_ranked ml ON Core.CleanOrder = ml.CleanMO AND Core.CleanItem = ml.ITEMNMBR AND ((Core.CleanDeductions = ml.Required_Qty AND ml.rn_qty = 1) OR
+                                ml.rn_any = 1))
+    SELECT        ITEMNMBR, ItemDescription, UOMSCHDL AS UOM, ORDERNUMBER, Construct, DUEDATE, [Expiry Dates], [Date + Expiry], CAST(BEG_BAL_Num AS varchar(50)) AS BEG_BAL, Original_Deductions AS Deductions, 
+                              Original_Expiry AS Expiry, Original_POs AS [PO's], Original_Running_Balance AS Running_Balance, MRP_IssueDate, WCID_From_MO, Issued, Remaining, Has_Issued, IssueDate_Mismatch, Early_Issue_Flag, VendorItem, 
+                              PRIME_VNDR, PURCHASING_LT, PLANNING_LT, ORDER_POINT_QTY, SAFETY_STOCK, FG, [FG Desc], STSDESCR, MRPTYPE, Unified_Value
+     FROM            Final;
