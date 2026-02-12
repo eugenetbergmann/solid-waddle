@@ -1,0 +1,28 @@
+WITH TempAvgCost AS (SELECT        r.[Item Number], r.[Item Description], r.[U Of M], SUM(r.[QTY Shipped]) AS TotalQtyShipped, SUM(p.UNITCOST * r.[QTY Shipped]) AS TotalCost, CASE WHEN SUM(r.[QTY Shipped]) 
+                                                                              > 0 THEN SUM(p.UNITCOST * r.[QTY Shipped]) / SUM(r.[QTY Shipped]) ELSE 0 END AS AverageCost
+                                                    FROM            dbo.ReceivingsLineItems AS r LEFT OUTER JOIN
+                                                                              dbo.POP30330 AS p ON r.[Receipt Line Number] = p.RCPTLNNM AND r.[Item Number] = p.ITEMNMBR AND r.[POP Receipt Number] = p.POPRCTNM
+                                                    WHERE        (r.[Created Date] > CONVERT(DATETIME, '2020-01-01 00:00:00', 102)) AND (r.[Item Tracking Option] <> 'None') AND (p.SERLTNUM IS NOT NULL) AND (NOT (r.[Item Number] LIKE '20.%'))
+                                                    GROUP BY r.[Item Number], r.[Item Description], r.[U Of M]), DemandHistory AS
+    (SELECT        Component, DATEPART(WEEK, IssueDate) AS WeekNum, YEAR(IssueDate) AS YearNum, SUM(IssueQty) AS WeeklyDemand, UoM
+      FROM            dbo.PHR_MO_CostCalc1
+      WHERE        (YEAR(IssueDate) IN (2024, 2025))
+      GROUP BY Component, DATEPART(WEEK, IssueDate), YEAR(IssueDate), UoM), DemandStats AS
+    (SELECT        Component, AVG(WeeklyDemand) AS AvgWeeklyDemand, STDEV(WeeklyDemand) AS StdDevWeekly, MAX(WeeklyDemand) AS MaxWeeklyDemand, SUM(WeeklyDemand) AS TotalDemand, UoM
+      FROM            DemandHistory AS DemandHistory_1
+      GROUP BY Component, UoM), SSCalculation AS
+    (SELECT        ss.ITEMNMBR, ss.VendorItem, ss.PRIME_VNDR, CASE WHEN ss.ITEMNMBR LIKE '30.%' THEN 100 WHEN ss.ITEMNMBR LIKE '10.%' THEN 60 ELSE 45 END AS LeadDays, ac.TotalQtyShipped, 
+                                ac.[U Of M] AS PurchasingUOM, ac.TotalCost, ac.AverageCost, ds.AvgWeeklyDemand, ds.StdDevWeekly, ds.MaxWeeklyDemand, ds.UoM AS MfgUOM, ROUND((2.0 * (ds.MaxWeeklyDemand - ds.AvgWeeklyDemand)) 
+                                * ((CASE WHEN ss.ITEMNMBR LIKE '30.%' THEN 100 WHEN ss.ITEMNMBR LIKE '10.%' THEN 60 ELSE 45 END) / 7.0), 0) AS CalculatedSS_MfgUOM, ROUND((2.0 * (ds.MaxWeeklyDemand - ds.AvgWeeklyDemand)) 
+                                * ((CASE WHEN ss.ITEMNMBR LIKE '30.%' THEN 100 WHEN ss.ITEMNMBR LIKE '10.%' THEN 60 ELSE 45 END) / 7.0) * ac.AverageCost, 2) AS SSValue, ROUND(CAST(ds.TotalDemand AS FLOAT) / NULLIF (ac.TotalQtyShipped, 
+                                0), 2) AS PURUOM, CEILING(CAST(ROUND((2.0 * (ds.MaxWeeklyDemand - ds.AvgWeeklyDemand)) * ((CASE WHEN ss.ITEMNMBR LIKE '30.%' THEN 100 WHEN ss.ITEMNMBR LIKE '10.%' THEN 60 ELSE 45 END) / 7.0), 0) 
+                                AS FLOAT) / NULLIF (ROUND(CAST(ds.TotalDemand AS FLOAT) / NULLIF (ac.TotalQtyShipped, 0), 2), 0)) AS CalculatedSS_PurchasingUOM
+      FROM            dbo.ETB_SS AS ss INNER JOIN
+                                TempAvgCost AS ac ON ss.ITEMNMBR = ac.[Item Number] LEFT OUTER JOIN
+                                DemandStats AS ds ON ss.ITEMNMBR = ds.Component
+      WHERE        (ss.VendorItem IS NOT NULL) AND (ss.VendorItem <> '') AND (ss.INCLUDE_MRP = 'YES') AND (ss.VendorItem NOT LIKE '%**%'))
+    SELECT        TOP (100) PERCENT ITEMNMBR, VendorItem, PRIME_VNDR, LeadDays, TotalQtyShipped, PurchasingUOM, TotalCost, AverageCost, AvgWeeklyDemand, StdDevWeekly, MaxWeeklyDemand, MfgUOM, CalculatedSS_MfgUOM, 
+                              SSValue, PURUOM, CalculatedSS_PurchasingUOM
+     FROM            SSCalculation AS SSCalculation_1
+     WHERE        (SSValue <= 20000)
+     ORDER BY ITEMNMBR
