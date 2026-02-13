@@ -190,15 +190,15 @@ Compresses thousands of demand rows into a single risk signal per item/vendor co
 
 ### View 7 — `ETB_BUYER_CONTROL` (Buyer PO Consolidation Engine)
 
-Groups deficit demand by item/vendor and recommends consolidated PO quantities that include safety stock. Classifies urgency based on lead-time windows and calculates total vendor exposure.
+Groups deficit demand by item/vendor and recommends consolidated PO quantities that include safety stock. Classifies urgency based on lead-time windows, calculates total vendor exposure, and provides EOQ-based recommendations with holding cost analysis.
 
-**Vendor resolution**: Same `COALESCE` strategy as View 6.
+**Vendor resolution**: Four-tier fallback hierarchy — `ETB_SS_CALC` → `ETB_PAB_SUPPLY_ACTION` → `ETB_PAB_WFQ_ADJ` → `UNASSIGNED`.
 
 **Key outputs**:
 
 | Column | Description |
 |--------|-------------|
-| `PRIME_VNDR` | Resolved vendor |
+| `PRIME_VNDR` | Resolved vendor (via fallback hierarchy) |
 | `ITEMNMBR` | Item number |
 | `ItemDescription` | Item description from vendor master |
 | `UOM` | Unit of measure |
@@ -209,11 +209,32 @@ Groups deficit demand by item/vendor and recommends consolidated PO quantities t
 | `LeadDays` | Vendor lead time (default 30) |
 | `CalculatedSS_PurchasingUOM` | Safety stock in purchasing UOM |
 | `Urgency` | PLACE_NOW / PLAN / MONITOR |
+| `Holding_Cost_Pct` | Annual carrying cost percentage (default 25%) |
+| `Unit_Cost` | Unit cost from `ETB_SS_CALC` or `POP30330` |
+| `Holding_Cost_Annual` | Annual cost to hold average inventory |
+| `Order_Cost_Estimate` | Fixed cost per purchase order ($50) |
+| `Total_Carrying_Cost` | Combined holding + ordering costs |
+| `Recommended_PO_Qty_Optimized` | EOQ-based recommendation with deficit floor |
+| `Vendor_Data_Source` | Source of vendor assignment (audit trail) |
+| `SS_Data_Source` | Source of safety stock data |
+| `Has_Complete_SS_Data` | YES / PARTIAL / NO data quality flag |
+| `Data_Quality_Flag` | CLEAN / MISSING_VENDOR / MISSING_COST / MISSING_BOTH |
+| `Cost_Data_Source` | Source of unit cost data |
 
 **Urgency classification**:
 - **PLACE_NOW**: Stockout within 1x lead time
 - **PLAN**: Stockout within 2x lead time
 - **MONITOR**: Stockout beyond 2x lead time
+
+**Holding cost calculation**:
+- Derived from `SSValue / (SS_Qty * Unit_Cost)` when SS data available
+- Falls back to 25% industry standard when unavailable
+- Formula: `(Recommended_Qty / 2) * Unit_Cost * Holding_Cost_Pct`
+
+**EOQ optimization**:
+- Uses Economic Order Quantity formula when SS data incomplete
+- Formula: `SQRT((2 * Annual_Demand * Order_Cost) / (Unit_Cost * Holding_Cost_Pct))`
+- Deficit quantity serves as minimum order floor
 
 ---
 
@@ -326,7 +347,7 @@ IF EXISTS (SELECT 1 FROM sys.views WHERE name = 'ETB_PAB_SUPPLY_ACTION') DROP VI
 | `Demand_Due_Date` is NULL | Excluded via WHERE clause in Views 6, 7 |
 | `Deficit_Qty <= 0` | Excluded (overages are not stockout signals) |
 | No matching safety stock record | LEFT JOIN with `ISNULL(LeadDays, 30)` fallback |
-| `PRIME_VNDR` NULL in supply action | `COALESCE` with `ETB_SS_CALC.PRIME_VNDR` in Views 6, 7 |
+| `PRIME_VNDR` NULL in supply action | Four-tier fallback: SS_CALC → SUPPLY_ACTION → WFQ_ADJ → UNASSIGNED |
 | `WFQ_Extended_Status` is NULL | Treated as 0 for `WFQ_Dependency_Flag` |
 | `Construct` is NULL | Excluded from `Client_Exposure_Count` |
 | `First_Stockout_Date` is NULL | `Days_To_Stockout` = NULL, `Schedule_Threat` = 0 |
@@ -340,7 +361,7 @@ IF EXISTS (SELECT 1 FROM sys.views WHERE name = 'ETB_PAB_SUPPLY_ACTION') DROP VI
 
 2. **Cumulative WFQ Overlay**: WFQ supply is summed cumulatively by due date. A consume-once waterfall model is not currently implemented.
 
-3. **Vendor COALESCE Strategy**: Views 6 and 7 resolve `PRIME_VNDR` via `COALESCE(supply_action.PRIME_VNDR, ss_calc.PRIME_VNDR)` to ensure vendor is always populated when either source has a value.
+3. **Vendor Fallback Hierarchy**: View 7 uses a four-tier vendor resolution strategy: `ETB_SS_CALC` → `ETB_PAB_SUPPLY_ACTION` → `ETB_PAB_WFQ_ADJ` → `UNASSIGNED`, ensuring complete vendor coverage with full audit trail via `Vendor_Data_Source`.
 
 4. **MAX Aggregation for Description/UOM**: `ItemDescription` and `UOM` use `MAX()` in aggregation CTEs rather than being added to `GROUP BY`, preserving rollup cardinality.
 
