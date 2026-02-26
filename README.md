@@ -15,6 +15,7 @@ sql/
   05_etb_pab_supply_action.sql     # View 5 — Supply action decision surface
   06_etb_run_risk.sql              # View 6 — Executive risk aggregation
   07_etb_buyer_control.sql         # View 7 — Buyer PO consolidation engine
+  08_etb_v_client_295_stockouts.sql# View 8 — Client 295 stockout detection
   ETB_SS_CALC                      # Reference — Safety stock calculation query
 
 docs/
@@ -66,14 +67,23 @@ plans/
                                     │  Decision Surface     │
                                     └──────────┬───────────┘
                                                │
-                              ┌────────────────┴────────────────┐
-                              ▼                                 ▼
-                   ┌──────────────────────┐          ┌──────────────────────┐
-                   │  View 6: ETB_RUN_RISK│          │  View 7: ETB_BUYER_  │
-                   │  Risk Aggregation     │          │  CONTROL             │
-                   │  + ETB_SS_CALC        │          │  PO Consolidation    │
-                   └──────────────────────┘          │  + ETB_SS_CALC        │
-                                                     └──────────────────────┘
+                               ┌────────────────┴────────────────┐
+                               ▼                                 ▼
+                    ┌──────────────────────┐          ┌──────────────────────┐
+                    │  View 6: ETB_RUN_RISK│          │  View 7: ETB_BUYER_  │
+                    │  Risk Aggregation     │          │  CONTROL             │
+                    │  + ETB_SS_CALC        │          │  PO Consolidation    │
+                    └──────────────────────┘          │  + ETB_SS_CALC        │
+                                                      └──────────────────────┘
+                                                                │
+                                                                ▼
+                                                      ┌──────────────────────┐
+                                                      │  View 8: ETB_V_      │
+                                                      │  CLIENT_295_STOCKOUTS│
+                                                      │  Client 295 Stockout │
+                                                      │  Detection + Shared  │
+                                                      │  Demand Analysis     │
+                                                      └──────────────────────┘
 ```
 
 ---
@@ -89,6 +99,7 @@ plans/
 | 5 | `ETB_PAB_SUPPLY_ACTION` | `05_etb_pab_supply_action.sql` | Final decision surface: deficit analysis, PO timing, supply action recommendations | View 4 + View 3 | **Production** |
 | 6 | `ETB_RUN_RISK` | `06_etb_run_risk.sql` | Executive risk dashboard: stockout timing, client exposure, schedule threats | View 5 + `ETB_SS_CALC` | **Production** |
 | 7 | `ETB_BUYER_CONTROL` | `07_etb_buyer_control.sql` | Buyer action queue: PO consolidation, urgency classification, vendor exposure | View 5 + `ETB_SS_CALC` | **Production** |
+| 8 | `ETB_V_CLIENT_295_STOCKOUTS` | `08_etb_v_client_295_stockouts.sql` | Client 295 stockout detection: item/run-level risk with shared demand analysis | View 5 + `ETB_SS_CALC` + `ETB_PAB_WFQ_ADJ` | **Production** |
 | — | `ETB_SS_CALC` | `ETB_SS_CALC` | Safety stock calculation: lead times, demand statistics, SS quantities | `ETB_SS`, `ReceivingsLineItems`, `POP30330`, `PHR_MO_CostCalc1` | Reference |
 
 ---
@@ -238,6 +249,84 @@ Groups deficit demand by item/vendor and recommends consolidated PO quantities t
 
 ---
 
+### View 8 — `ETB_V_CLIENT_295_STOCKOUTS` (Client 295 Stockout Detection)
+
+Provides clear, actionable stockout signals scoped to Construct 295 while capturing market-wide demand context. The key design goal is one binary stockout signal per item/run — `Is_Stockout = YES/NO` — with full visibility into how much of the total demand Client 295 represents (`Shared_Demand_Ratio`).
+
+**4-step pipeline**:
+
+1. **`Client295_Demand`** — Non-suppressed positive-demand rows for `Construct = '295'`, bucketed by ISO year-week into `Run_Bucket`.
+2. **`AllCustomers_Demand` + `AggDemand_Summary`** — All customers' non-suppressed demand for the same item/run combinations. Aggregates `Aggregate_Demand_All_Customers`, `Customer_Count`, and `Affected_Customers` (STRING_AGG comma list).
+3. **`Stockout_Detection`** — Groups Client 295 rows by item/run and determines `Is_Stockout` (`YES` if `MIN(Adjusted_Running_Balance) < 0`), `Stockout_Qty` (ABS of min balance), and balance range.
+4. **`Final_Output`** — Joins steps 1–3, calculates `Shared_Demand_Ratio`, applies vendor fallback (`ETB_SS_CALC` → `ETB_PAB_SUPPLY_ACTION` → `ETB_PAB_WFQ_ADJ`), and emits the buyer-facing result set.
+
+**Pattern A suppression** enforced via `Suppression_Status NOT IN ('BEGINNING BALANCE', 'SUPPRESSED: Stale & Unissued', 'SUPPRESSED: Full Coverage in Fence')` — eliminates WC inventory noise before any aggregation.
+
+**Key outputs**:
+
+| Column | Description |
+|--------|-------------|
+| `ITEMNMBR` | Item number |
+| `Item_Description` | Item description from vendor master |
+| `UOM` | Unit of measure |
+| `Run_Bucket` | ISO year-week run identifier (e.g. `2026-W09`) |
+| `Demand_Year` | Calendar year of the run |
+| `Demand_Week` | ISO week number of the run |
+| `First_Stockout_Date` | Earliest date the balance goes negative within this run |
+| `Client295_Demand` | Sum of Client 295's `Net_Demand` for this item/run |
+| `Aggregate_Demand_All_Customers` | Sum of ALL customers' `Net_Demand` for this item/run |
+| `Shared_Demand_Ratio` | `Client295_Demand / Aggregate_Demand_All_Customers` (NULL if aggregate = 0) |
+| `Is_Stockout` | `YES` if `MIN(Adjusted_Running_Balance) < 0`, else `NO` |
+| `Stockout_Qty` | `ABS(MIN(Adjusted_Running_Balance))` when stocked out, else 0 |
+| `Max_Balance_In_Run` | Highest running balance seen within this run |
+| `Min_Balance_In_Run` | Lowest running balance (most negative = worst point) |
+| `Customer_Count` | Distinct customers sharing this item/run |
+| `Affected_Customers` | Comma-separated list of ALL customers sharing this item/run |
+| `Shared_Demand_Flag` | `YES` if `Customer_Count > 1` |
+| `Primary_Vendor` | Vendor via COALESCE: `ETB_SS_CALC` → `ETB_PAB_SUPPLY_ACTION` → `ETB_PAB_WFQ_ADJ` |
+| `Vendor_Item_Number` | Vendor's item number from `VendorItem` |
+| `WFQ_Dependency_Flag` | 1 if any row in this run has WFQ rescue/enhancement status |
+| `Analysis_Date` | Date view was queried |
+| `Report_Type` | Constant: `CLIENT_295_STOCKOUT_MONITOR` |
+
+**Output ordering**: Confirmed stockouts first (`Is_Stockout = 'YES'`), then by `Stockout_Qty DESC` (most severe), then `Run_Bucket` (soonest), then `ITEMNMBR`.
+
+**Validation queries**:
+
+```sql
+-- Row count and stockout summary
+SELECT
+    Is_Stockout,
+    COUNT(*)           AS Item_Run_Count,
+    SUM(Stockout_Qty)  AS Total_Stockout_Qty
+FROM dbo.ETB_V_CLIENT_295_STOCKOUTS
+GROUP BY Is_Stockout;
+
+-- Verify Shared_Demand_Ratio sums correctly
+SELECT TOP 20
+    ITEMNMBR, Run_Bucket,
+    Client295_Demand,
+    Aggregate_Demand_All_Customers,
+    Shared_Demand_Ratio,
+    -- Should equal Client295_Demand / Aggregate_Demand_All_Customers
+    CAST(Client295_Demand AS decimal(18,6))
+        / NULLIF(Aggregate_Demand_All_Customers, 0) AS Ratio_Check
+FROM dbo.ETB_V_CLIENT_295_STOCKOUTS
+WHERE Shared_Demand_Flag = 'YES';
+
+-- Confirm no WC noise (all suppressed rows should be excluded)
+SELECT COUNT(*) AS Should_Be_Zero
+FROM dbo.ETB_V_CLIENT_295_STOCKOUTS
+WHERE Item_Description IS NULL OR UOM IS NULL;
+
+-- Vendor coverage check
+SELECT COUNT(*) AS Null_Vendors
+FROM dbo.ETB_V_CLIENT_295_STOCKOUTS
+WHERE Primary_Vendor IS NULL;
+```
+
+---
+
 ### `ETB_SS_CALC` (Safety Stock Calculation)
 
 Calculates safety stock using a demand variability model based on 2024–2025 weekly consumption from `PHR_MO_CostCalc1`. Derives average cost from receiving history, computes demand statistics, and applies a `2 × (MaxWeekly - AvgWeekly) × (LeadDays / 7)` formula.
@@ -292,6 +381,7 @@ Execute in order — each view depends on its predecessors:
 | 6 | `sql/ETB_SS_CALC` | `dbo.ETB_SS_CALC` (if not already deployed) |
 | 7 | `sql/06_etb_run_risk.sql` | `dbo.ETB_RUN_RISK` |
 | 8 | `sql/07_etb_buyer_control.sql` | `dbo.ETB_BUYER_CONTROL` |
+| 9 | `sql/08_etb_v_client_295_stockouts.sql` | `dbo.ETB_V_CLIENT_295_STOCKOUTS` |
 
 > **Note**: Views 1–4 are reference only (already deployed in SSMS). View 5 and the control layer views (6, 7) are production code.
 
@@ -304,26 +394,32 @@ FROM sys.views
 WHERE name IN (
     'ETB_PAB_AUTO', 'ETB_WC_INV_Unified', 'ETB_WFQ_PIPE',
     'ETB_PAB_WFQ_ADJ', 'ETB_PAB_SUPPLY_ACTION',
-    'ETB_RUN_RISK', 'ETB_BUYER_CONTROL'
+    'ETB_RUN_RISK', 'ETB_BUYER_CONTROL',
+    'ETB_V_CLIENT_295_STOCKOUTS'
 );
 
 -- Row count check
 SELECT 'ETB_PAB_SUPPLY_ACTION' AS View_Name, COUNT(*) AS Rows FROM dbo.ETB_PAB_SUPPLY_ACTION
 UNION ALL SELECT 'ETB_RUN_RISK', COUNT(*) FROM dbo.ETB_RUN_RISK
-UNION ALL SELECT 'ETB_BUYER_CONTROL', COUNT(*) FROM dbo.ETB_BUYER_CONTROL;
+UNION ALL SELECT 'ETB_BUYER_CONTROL', COUNT(*) FROM dbo.ETB_BUYER_CONTROL
+UNION ALL SELECT 'ETB_V_CLIENT_295_STOCKOUTS', COUNT(*) FROM dbo.ETB_V_CLIENT_295_STOCKOUTS;
 
 -- Verify no NULL vendors in control layer
 SELECT 'ETB_RUN_RISK' AS View_Name, COUNT(*) AS Null_Vendors
 FROM dbo.ETB_RUN_RISK WHERE PRIME_VNDR IS NULL
 UNION ALL
 SELECT 'ETB_BUYER_CONTROL', COUNT(*)
-FROM dbo.ETB_BUYER_CONTROL WHERE PRIME_VNDR IS NULL;
+FROM dbo.ETB_BUYER_CONTROL WHERE PRIME_VNDR IS NULL
+UNION ALL
+SELECT 'ETB_V_CLIENT_295_STOCKOUTS', COUNT(*)
+FROM dbo.ETB_V_CLIENT_295_STOCKOUTS WHERE Primary_Vendor IS NULL;
 ```
 
 ### Rollback
 
 ```sql
 -- Drop in reverse order
+IF EXISTS (SELECT 1 FROM sys.views WHERE name = 'ETB_V_CLIENT_295_STOCKOUTS') DROP VIEW dbo.ETB_V_CLIENT_295_STOCKOUTS;
 IF EXISTS (SELECT 1 FROM sys.views WHERE name = 'ETB_BUYER_CONTROL') DROP VIEW dbo.ETB_BUYER_CONTROL;
 IF EXISTS (SELECT 1 FROM sys.views WHERE name = 'ETB_RUN_RISK') DROP VIEW dbo.ETB_RUN_RISK;
 IF EXISTS (SELECT 1 FROM sys.views WHERE name = 'ETB_PAB_SUPPLY_ACTION') DROP VIEW dbo.ETB_PAB_SUPPLY_ACTION;
@@ -352,6 +448,10 @@ IF EXISTS (SELECT 1 FROM sys.views WHERE name = 'ETB_PAB_SUPPLY_ACTION') DROP VI
 | `Construct` is NULL | Excluded from `Client_Exposure_Count` |
 | `First_Stockout_Date` is NULL | `Days_To_Stockout` = NULL, `Schedule_Threat` = 0 |
 | "Beg Bal" row | Never suppressed; anchors all balance calculations |
+| Client 295 is sole customer for item/run | `Customer_Count = 1`, `Shared_Demand_Flag = 'NO'`, `Shared_Demand_Ratio = 1.0` |
+| `Aggregate_Demand_All_Customers = 0` | `Shared_Demand_Ratio` = NULL (divide-by-zero guard) |
+| `Net_Demand <= 0` for Client 295 | Row excluded from `Client295_Demand`; won't appear in output |
+| Item has no `ETB_SS_CALC` record | `Primary_Vendor` falls back to `PRIME_VNDR` from `ETB_PAB_SUPPLY_ACTION`, then `ETB_PAB_WFQ_ADJ` |
 
 ---
 
