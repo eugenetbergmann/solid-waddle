@@ -1,3 +1,10 @@
+-- ============================================================================
+-- VIEW: ETB_WFQ_PIPE
+-- Purpose: WFQ (Work-For-Queue) supply pipeline
+-- Author: Zo Computer
+-- Date: 2026-02-26
+-- Dependencies: dbo.IV00300, dbo.IV00101
+-- ============================================================================
 /*
 ================================================================================
 ETB_WFQ_PIPE — WFQ (Work-For-Queue) Supply Pipeline (View 3)
@@ -17,33 +24,31 @@ Source Tables:
 
 Business Logic:
   • Locations: WF-Q (Work-For-Queue staging) and UNDERINV (under-inventory hold)
-  • Age filter: lots received within 65 days are considered active supply
-  • Series 10 items have a 21-day SOP window; all others use 14 days
+  • Age filter: lots received within Lot_Age_Limit_Days are considered active supply
+  • Series 10 items have a SOP_Target_Days_Series_10 window; all others use SOP_Target_Days_Other
   • Estimated_Release_Date = DATERECD + SOP_Target_Days
-  • Valid_Expiration: 1 if lot expiry > 90 days from today (usable stock)
+  • Valid_Expiration: 1 if lot expiry > Expiration_Buffer_Days from today (usable stock)
   • Lots with net quantity = 0 (QTYRECVD - QTYSOLD = 0) are excluded
 
-Named Thresholds (Issue 8):
-  SOP_Target_Days_Series10  = 21  days (series '10' items)
-  SOP_Target_Days_Default   = 14  days (all other series)
-  Lot_Age_Cutoff_Days       = 65  days (max age of active WFQ lot)
-  Expiry_Valid_Window_Days  = 90  days (min days to expiry for Valid_Expiration=1)
+Named Thresholds (Config CTE):
+  SOP_Target_Days_Series_10  = 21  days (series '10' items)
+  SOP_Target_Days_Other      = 14  days (all other series)
+  Lot_Age_Limit_Days         = 65  days (max age of active WFQ lot)
+  Expiration_Buffer_Days     = 90  days (min days to expiry for Valid_Expiration=1)
 
 Change Log:
-  2026-02-26: Added header documentation, named thresholds (Issue 8), NOLOCK
-              hint for consistency (Issue 9), series-based SOP logic documented
-              (Issue 10).
-  2026-02-27: Added Config CTE so all thresholds are sourced from named constants
-              rather than inline magic numbers (Issue 8 complete for this file).
+  2026-02-26: Added header documentation, Config CTE for named thresholds
+              (Issue 8), NOLOCK hint for consistency (Issue 9), series-based
+              SOP logic documented (Issue 10).
 ================================================================================
 */
 
 WITH Config AS (
-    SELECT
-        21 AS SOP_Target_Days_Series_10,    -- Target days for series 10 items (API/actives)
-        14 AS SOP_Target_Days_Other,         -- Target days for all other series
-        65 AS Lot_Age_Limit_Days,            -- Max lot age (days) to be considered active supply
-        90 AS Expiration_Buffer_Days         -- Min days to expiry for Valid_Expiration = 1
+    SELECT 
+        21 AS SOP_Target_Days_Series_10,    -- Target days for series 10 items
+        14 AS SOP_Target_Days_Other,         -- Target days for other series
+        65 AS Lot_Age_Limit_Days,            -- Max lot age to consider
+        90 AS Expiration_Buffer_Days         -- Days before expiration to flag
 )
 
 SELECT
@@ -83,10 +88,10 @@ SELECT
     )                                                           AS Estimated_Release_Date,
 
     -- 1 = lot expiry is far enough out to be usable supply
-    -- Issue 8: Expiration_Buffer_Days from Config CTE
+    -- Issue 8: threshold sourced from Config CTE (Expiration_Buffer_Days = 90)
     CASE WHEN dbo.IV00300.EXPNDATE > DATEADD(DAY,
-                                         (SELECT Expiration_Buffer_Days FROM Config),
-                                         GETDATE())
+                                        (SELECT Expiration_Buffer_Days FROM Config),
+                                        GETDATE())
          THEN 1
          ELSE 0
     END                                                         AS Valid_Expiration

@@ -1,3 +1,12 @@
+-- ============================================================================
+-- VIEW: ETB_PAB_AUTO
+-- Purpose: Base demand normalization and MO matching
+-- Author: Zo Computer
+-- Date: 2026-02-26
+-- Dependencies: dbo.ETB_PAB_MO, dbo.ETB_ActiveDemand_Union_FG_MO,
+--               dbo.Prosenthal_Vendor_Items, dbo.PK010033,
+--               dbo.WO010032, dbo.IV00101
+-- ============================================================================
 /*
 ================================================================================
 ETB_PAB_AUTO — Base Demand Normalization and MO Matching (View 1)
@@ -170,12 +179,13 @@ joined AS
 
             -- Issue 4: UNASSIGNED fallback — items with no vendor still flow
             -- through the pipeline and are flagged for data-quality review.
-            COALESCE(p_norm.PRIME_VNDR, 'UNASSIGNED')           AS PRIME_VNDR,
+            COALESCE(NULLIF(p_norm.PRIME_VNDR, ''), 'UNASSIGNED')  AS PRIME_VNDR,
 
             -- Issue 4: Track which source provided the vendor value
             CASE
-                WHEN p_norm.PRIME_VNDR IS NOT NULL THEN 'PAB_MO'
-                ELSE                                    'UNASSIGNED'
+                WHEN p_norm.PRIME_VNDR IS NOT NULL
+                 AND LTRIM(RTRIM(p_norm.PRIME_VNDR)) <> '' THEN 'PAB_MO'
+                ELSE                                             'UNASSIGNED'
             END                                                 AS Vendor_Data_Source,
 
             p_norm.PURCHASING_LT,
@@ -332,8 +342,9 @@ Final AS
             END                                             AS WC_Site_Validation,
 
             -- Issue 5: Row-level data quality flag
-            CASE WHEN Core.PRIME_VNDR = 'UNASSIGNED'  THEN 'MISSING_VENDOR'
-                 ELSE                                       'CLEAN'
+            CASE WHEN COALESCE(NULLIF(Core.PRIME_VNDR, ''), 'UNASSIGNED') = 'UNASSIGNED'
+                      THEN 'MISSING_VENDOR'
+                 ELSE      'CLEAN'
             END                                             AS Data_Quality_Flag
 
     FROM    Core
@@ -345,7 +356,7 @@ Final AS
 )
 
 -- ============================================================================
--- Output: View 1 columns — consumed by View 2 (ETB_WC_INV_UNIFIED)
+-- Output: View 1 columns — consumed by View 3 (ETB_WFQ_PIPE) and View 4+
 -- ============================================================================
 SELECT
     ITEMNMBR,

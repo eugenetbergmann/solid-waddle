@@ -1,7 +1,17 @@
+-- ============================================================================
+-- VIEW: ETB_WC_INV_UNIFIED
+-- Purpose: WC inventory integration with running balance adjustments
+-- Author: Zo Computer
+-- Date: 2026-02-26
+-- Dependencies: dbo.ETB_PAB_MO, dbo.ETB_ActiveDemand_Union_FG_MO,
+--               dbo.Prosenthal_Vendor_Items, dbo.PK010033, dbo.WO010032,
+--               dbo.IV00101, dbo.Prosenthal_INV_BIN_QTY_wQTYTYPE,
+--               dbo.IV10300
+-- ============================================================================
 /*
 ================================================================================
 ETB_WC_INV_UNIFIED — WC Inventory Integration with Running Balance Adjustments
-                     (View 2)
+                     (Analysis View 2)
 ================================================================================
 Purpose:
   Extends View 1 (ETB_PAB_AUTO) by integrating Work-Centre (WC) bin inventory,
@@ -16,15 +26,18 @@ Purpose:
     • Running-balance recalculation uses a delta/anchor pattern so that only
       unsuppressed rows contribute to the forward-looking balance.
 
+  NOTE: This view has been moved to analysis-views/ in the reorganized pipeline.
+  Pipeline views 04 and 05 re-inline this logic directly for performance.
+
 Source Tables:
-  dbo.ETB_PAB_MO                    — Raw PAB demand rows
-  dbo.ETB_ActiveDemand_Union_FG_MO  — FG / Construct mapping
-  dbo.Prosenthal_Vendor_Items       — Item master (description, UOM)
-  dbo.PK010033                      — Manufacturing ledger
-  dbo.WO010032                      — Work-order status filter
-  dbo.IV00101                       — Item master (ledger enrichment)
+  dbo.ETB_PAB_MO                       — Raw PAB demand rows
+  dbo.ETB_ActiveDemand_Union_FG_MO     — FG / Construct mapping
+  dbo.Prosenthal_Vendor_Items          — Item master (description, UOM)
+  dbo.PK010033                         — Manufacturing ledger
+  dbo.WO010032                         — Work-order status filter
+  dbo.IV00101                          — Item master (ledger enrichment)
   dbo.Prosenthal_INV_BIN_QTY_wQTYTYPE — WC bin inventory quantities
-  dbo.IV10300                       — Cycle count header (last count date)
+  dbo.IV10300                          — Cycle count header (last count date)
 
 CTE Pipeline:
   Config          → Named threshold constants (Issues 8)
@@ -35,7 +48,7 @@ CTE Pipeline:
   ranked          → Row-number dedup
   Core            → Single row per (ORDERNUMBER, FG, ITEMNMBR)
   ledger_ranked   → Ledger deduplication
-  Final           → Ledger attachment + WC/vendor flags
+  PAB_Final       → Ledger attachment + WC/vendor flags
   Base            → Column rename / reshape for downstream CTEs
   InventoryAgg    → WC bin inventory aggregated to (Item, Site)
                     (Issue 9: grouped with validation guard on SITE pattern)
@@ -66,6 +79,8 @@ Change Log:
               count integration, Config thresholds, WC site validation, data
               quality flags, suppression audit trail, NOLOCK consistency,
               header documentation. (Issues 2–10)
+  2026-02-26: Moved from pipeline-views/ to analysis-views/ as part of
+              5-view pipeline reorganization with ETB_SS_CALC integration.
 ================================================================================
 */
 
@@ -145,7 +160,7 @@ m_norm AS
                     UPPER(LTRIM(RTRIM(CONVERT(varchar(255),
                         REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(
                             m.ORDERNUMBER,
-                            'MO', ''), '-', ''), ' ', ''), '/', ''), '.', ''), '#', '')))))
+                            'MO', ''), '-', ''), ' ', ''), '/', ''), '.', ''), '#', ')))))
                     , m.FG
                 ORDER BY m.Customer, m.[FG Desc], m.ORDERNUMBER
             )                                                   AS rn_fg
@@ -194,12 +209,13 @@ joined AS
             p_norm.VendorItem,
 
             -- Issue 4: UNASSIGNED fallback so NULL vendor items are retained
-            COALESCE(p_norm.PRIME_VNDR, 'UNASSIGNED')           AS PRIME_VNDR,
+            COALESCE(NULLIF(p_norm.PRIME_VNDR, ''), 'UNASSIGNED')  AS PRIME_VNDR,
 
             -- Issue 4: Track vendor data source for audit
             CASE
-                WHEN p_norm.PRIME_VNDR IS NOT NULL THEN 'PAB_MO'
-                ELSE                                    'UNASSIGNED'
+                WHEN p_norm.PRIME_VNDR IS NOT NULL
+                 AND LTRIM(RTRIM(p_norm.PRIME_VNDR)) <> '' THEN 'PAB_MO'
+                ELSE                                             'UNASSIGNED'
             END                                                 AS Vendor_Data_Source,
 
             p_norm.PURCHASING_LT,
@@ -390,8 +406,8 @@ Base AS
 -- Issue 2: GROUP BY guard — only SITE values matching 'WC-W%' are aggregated.
 --          This prevents non-WC locations (e.g., UNDERINV, STAGING) from
 --          inflating the Inventory_Qty_Available used in suppression logic.
--- Issue 9: Index candidate on Prosenthal_INV_BIN_QTY_wQTYTYPE: (SITE, Item_Number,
---          DATERECD) to support the WHERE filter efficiently.
+-- Issue 9: Index candidate on Prosenthal_INV_BIN_QTY_wQTYTYPE: (SITE,
+--          Item_Number, DATERECD) to support the WHERE filter efficiently.
 -- Issue 8: WC_Inventory_Age_Days (45) from Config CTE
 -- ============================================================================
 InventoryAgg AS
@@ -614,7 +630,7 @@ Adjusted AS
 )
 
 -- ============================================================================
--- Output: View 2 columns — consumed by Views 3, 4, 5
+-- Output: Analysis View 2 columns
 -- ============================================================================
 -- Issue 5: Data_Quality_Flag classifies row-level data completeness
 -- ============================================================================
