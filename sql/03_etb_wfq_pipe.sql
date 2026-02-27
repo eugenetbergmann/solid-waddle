@@ -33,8 +33,18 @@ Change Log:
   2026-02-26: Added header documentation, named thresholds (Issue 8), NOLOCK
               hint for consistency (Issue 9), series-based SOP logic documented
               (Issue 10).
+  2026-02-27: Added Config CTE so all thresholds are sourced from named constants
+              rather than inline magic numbers (Issue 8 complete for this file).
 ================================================================================
 */
+
+WITH Config AS (
+    SELECT
+        21 AS SOP_Target_Days_Series_10,    -- Target days for series 10 items (API/actives)
+        14 AS SOP_Target_Days_Other,         -- Target days for all other series
+        65 AS Lot_Age_Limit_Days,            -- Max lot age (days) to be considered active supply
+        90 AS Expiration_Buffer_Days         -- Min days to expiry for Valid_Expiration = 1
+)
 
 SELECT
     -- View-level identifier — downstream CTEs filter on this value
@@ -52,12 +62,12 @@ SELECT
     -- Series code (first 2 characters of item number)
     LEFT(TRIM(dbo.IV00300.ITEMNMBR), 2)                         AS Series,
 
-    -- Issue 8: SOP target window — series 10 gets 21 days, all others 14 days.
+    -- Issue 8: SOP target window sourced from Config CTE.
     -- Business rule: series 10 items (API/active ingredients) require a longer
     -- in-process testing window before they can be released to production.
     CASE WHEN LEFT(TRIM(dbo.IV00300.ITEMNMBR), 2) = '10'
-         THEN 21
-         ELSE 14
+         THEN (SELECT SOP_Target_Days_Series_10 FROM Config)
+         ELSE (SELECT SOP_Target_Days_Other     FROM Config)
     END                                                         AS SOP_Target_Days,
 
     -- Age of this lot in days (from receipt to today)
@@ -65,13 +75,18 @@ SELECT
 
     -- Estimated release date = receipt date + series-specific SOP window
     DATEADD(DAY,
-        CASE WHEN LEFT(TRIM(dbo.IV00300.ITEMNMBR), 2) = '10' THEN 21 ELSE 14 END,
+        CASE WHEN LEFT(TRIM(dbo.IV00300.ITEMNMBR), 2) = '10'
+             THEN (SELECT SOP_Target_Days_Series_10 FROM Config)
+             ELSE (SELECT SOP_Target_Days_Other     FROM Config)
+        END,
         dbo.IV00300.DATERECD
     )                                                           AS Estimated_Release_Date,
 
     -- 1 = lot expiry is far enough out to be usable supply
-    -- Issue 8: threshold is 90 days; documented in header as Expiry_Valid_Window_Days
-    CASE WHEN dbo.IV00300.EXPNDATE > DATEADD(DAY, 90, GETDATE())
+    -- Issue 8: Expiration_Buffer_Days from Config CTE
+    CASE WHEN dbo.IV00300.EXPNDATE > DATEADD(DAY,
+                                         (SELECT Expiration_Buffer_Days FROM Config),
+                                         GETDATE())
          THEN 1
          ELSE 0
     END                                                         AS Valid_Expiration
@@ -79,6 +94,7 @@ SELECT
 FROM    dbo.IV00300
 -- Issue 9: NOLOCK for consistency with other views in this pipeline
 LEFT OUTER JOIN dbo.IV00101 WITH (NOLOCK) ON dbo.IV00300.ITEMNMBR = dbo.IV00101.ITEMNMBR
+CROSS JOIN Config
 
 WHERE
     -- Exclude lots that have been fully consumed
@@ -87,9 +103,9 @@ WHERE
     -- WFQ-eligible locations only
     AND TRIM(dbo.IV00300.LOCNCODE) IN ('WF-Q', 'UNDERINV')
 
-    -- Issue 8: Lot_Age_Cutoff_Days = 65; lots older than this are no longer
+    -- Issue 8: Lot_Age_Limit_Days from Config; lots older than this are no longer
     -- considered active supply (likely already consumed or condemned)
-    AND DATEDIFF(DAY, dbo.IV00300.DATERECD, GETDATE()) <= 65
+    AND DATEDIFF(DAY, dbo.IV00300.DATERECD, GETDATE()) <= (SELECT Lot_Age_Limit_Days FROM Config)
 
 GROUP BY
     TRIM(dbo.IV00300.ITEMNMBR),

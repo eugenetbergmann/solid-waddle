@@ -13,10 +13,34 @@ Key Enhancements:
 
 Change Log:
 - 2026-02-13: Added vendor fallback logic, holding costs, EOQ calculations
+- 2026-02-27: Added Config CTE for named thresholds (Issue 8 — eliminates
+              magic numbers 0.25, 50.00, 30, 1.5 scattered through the view).
 ================================================================================
 */
 
-WITH filter_supply AS
+-- ============================================================================
+-- Config: Named threshold constants (Issue 8)
+-- ============================================================================
+WITH Config AS (
+    SELECT
+        -- Default vendor lead time when ETB_SS_CALC has no matching record
+        30      AS Default_Lead_Days,
+
+        -- Industry-standard annual carrying cost percentage (when SS data unavailable)
+        0.25    AS Default_Holding_Cost_Pct,
+
+        -- Fixed cost per purchase order placement (administrative / transaction cost)
+        50.00   AS Order_Cost_Per_PO,
+
+        -- Deficit multiplier for EOQ fallback when all cost inputs are unavailable
+        -- e.g. 1.5x deficit ensures we never order the bare minimum in a data-gap scenario
+        1.5     AS EOQ_Fallback_Deficit_Multiplier,
+
+        -- Annual demand estimate multiplier: deficit × N months gives annual proxy
+        12      AS Annual_Demand_Months_Factor
+),
+
+filter_supply AS
 (
     /*
     Step 1: Filter supply action to only deficit items with actual demand dates.
@@ -70,8 +94,8 @@ vendor_fallback AS
                   SUM(fs.Deficit_Qty) AS Total_Deficit_Qty,
                   COUNT(DISTINCT fs.Demand_Due_Date) AS Demand_Lines_In_Bucket,
                   
-                  -- Lead days: Use SS_CALC if available, otherwise default to 30 days
-                  COALESCE(ss.LeadDays, 30) AS LeadDays,
+                   -- Lead days: Use SS_CALC if available; fall back to Config default
+                  COALESCE(ss.LeadDays, (SELECT Default_Lead_Days FROM Config)) AS LeadDays,
                   
                   -- Safety stock: Use SS_CALC if available, otherwise 0
                   COALESCE(ss.CalculatedSS_PurchasingUOM, 0) AS CalculatedSS_PurchasingUOM,
@@ -89,9 +113,9 @@ vendor_fallback AS
                       ELSE 'NO'
                   END AS Has_Complete_SS_Data,
                   
-                  -- Calculate annual demand for EOQ (approximate from deficit patterns)
-                  -- Using deficit as proxy for demand when historical data unavailable
-                  SUM(fs.Deficit_Qty) * 12 AS Annual_Demand_Estimate
+                   -- Calculate annual demand for EOQ (approximate from deficit patterns)
+                  -- Issue 8: Annual_Demand_Months_Factor from Config (replaces hardcoded 12)
+                  SUM(fs.Deficit_Qty) * (SELECT Annual_Demand_Months_Factor FROM Config) AS Annual_Demand_Estimate
                   
     FROM            filter_supply fs
     LEFT JOIN       dbo.ETB_SS_CALC ss 
@@ -193,11 +217,12 @@ holding_cost_calc AS
                               THEN cl.SSValue / (cl.CalculatedSS_MfgUOM * cl.Unit_Cost)
                               ELSE 0.25
                           END
-                      ELSE 0.25  -- Industry standard 25% annual carrying cost
-                  END AS Holding_Cost_Pct,
-                  
-                  -- Fixed order cost per PO (can be parameterized later)
-                  50.00 AS Order_Cost_Estimate
+                       -- Issue 8: Default_Holding_Cost_Pct from Config (replaces hardcoded 0.25)
+                       ELSE (SELECT Default_Holding_Cost_Pct FROM Config)
+                   END AS Holding_Cost_Pct,
+                   
+                   -- Issue 8: Order_Cost_Per_PO from Config (replaces hardcoded 50.00)
+                   (SELECT Order_Cost_Per_PO FROM Config) AS Order_Cost_Estimate
                   
     FROM            cost_lookup cl
 ),
@@ -236,7 +261,10 @@ final_output AS
                   hcc.LeadDays,
                   hcc.CalculatedSS_PurchasingUOM,
                   
-                  -- Urgency classification based on lead time vs stockout date
+                   -- Urgency classification based on lead time vs stockout date
+                  -- PLACE_NOW: stockout within 1x lead time (must order immediately)
+                  -- PLAN: stockout within 2x lead time (schedule soon)
+                  -- MONITOR: stockout beyond 2x lead time (watch and plan)
                   CASE 
                       WHEN hcc.First_Stockout_Date <= DATEADD(DAY, hcc.LeadDays, CAST(GETDATE() AS DATE)) 
                       THEN 'PLACE_NOW'
@@ -312,8 +340,8 @@ final_output AS
                                           )
                                       )
                                   
-                                  -- Fallback: 1.5x deficit if EOQ can't be calculated
-                                  ELSE hcc.Total_Deficit_Qty * 1.5
+                                   -- Issue 8: EOQ_Fallback_Deficit_Multiplier from Config (replaces 1.5)
+                                  ELSE hcc.Total_Deficit_Qty * (SELECT EOQ_Fallback_Deficit_Multiplier FROM Config)
                               END
                       END AS DECIMAL(18, 2)
                   ) AS Recommended_PO_Qty_Optimized,

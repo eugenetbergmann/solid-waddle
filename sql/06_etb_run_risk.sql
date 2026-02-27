@@ -1,4 +1,66 @@
-WITH threatened_clients_detail AS
+-- ============================================================================
+-- VIEW: ETB_RUN_RISK
+-- Purpose: Executive risk aggregation — stockout timing, client exposure, schedule threats
+-- Author: Zo Computer
+-- Date: 2026-02-26
+-- Dependencies: dbo.ETB_PAB_SUPPLY_ACTION (View 5), dbo.ETB_SS_CALC
+-- ============================================================================
+/*
+================================================================================
+ETB_RUN_RISK — Executive Risk Dashboard (View 6)
+================================================================================
+Purpose:
+  Compresses thousands of demand rows into a single risk signal per item/vendor
+  combination.  Identifies threatened clients, calculates stockout timing, and
+  flags schedule threats where stockout occurs before a PO could arrive based on
+  vendor lead time.
+
+  This is the primary executive-visibility surface — answers WHERE/WHEN/WHO/HOW.
+
+Source / Dependency:
+  dbo.ETB_PAB_SUPPLY_ACTION — View 5 (demand surface with deficit and suppression)
+  dbo.ETB_SS_CALC           — Safety stock reference (lead days, vendor fallback)
+
+CTE Pipeline:
+  Config                  → Named threshold constants (Issue 8)
+  threatened_clients_detail → Distinct item/vendor/client combinations with deficit
+  client_summary          → Rollup: threatened client list and count per item/vendor
+  deficit_rows            → Windowed aggregation: first stockout date, total deficit
+  with_threat             → Join ETB_SS_CALC for lead days; compute Schedule_Threat
+
+Key Outputs:
+  ITEMNMBR, PRIME_VNDR, ItemDescription, UOM
+  Threatened_Clients      — Comma-separated list of impacted customers
+  Client_Exposure_Count   — Number of distinct impacted customers
+  First_Stockout_Date     — Earliest projected stockout date
+  Days_To_Stockout        — Calendar days until stockout
+  Total_Deficit_Qty       — Total units short across all demand
+  WFQ_Dependency_Flag     — 1 if item relies on quarantine inventory
+  Schedule_Threat         — 1 if stockout occurs before PO lead time
+  LeadDays                — Vendor lead time (default from Config)
+
+Change Log:
+  2026-02-13: Initial production deployment.
+  2026-02-26: Added ItemDescription and UOM columns; COALESCE vendor from
+              ETB_SS_CALC fallback.
+  2026-02-27: Added documentation header (Issue 7), Config CTE for named
+              thresholds (Issue 8), UNASSIGNED fallback guard on PRIME_VNDR
+              COALESCE (Issue 4).
+================================================================================
+*/
+
+WITH Config AS (
+    SELECT
+        -- Default vendor lead time when ETB_SS_CALC has no matching record
+        -- Business rule: 30 days is the standard fallback lead time
+        30 AS Default_Lead_Days,
+
+        -- Schedule threat threshold multiplier (1x lead days)
+        -- A stockout is a "schedule threat" if it occurs within 1x lead time
+        1 AS Schedule_Threat_Multiplier
+),
+
+threatened_clients_detail AS
 (
     SELECT DISTINCT ITEMNMBR, PRIME_VNDR, ItemDescription, UOM, Construct
     FROM            dbo.ETB_PAB_SUPPLY_ACTION
@@ -33,12 +95,19 @@ deficit_rows AS
 with_threat AS
 (
     SELECT        d.ITEMNMBR, 
-                  COALESCE(d.PRIME_VNDR, ss.PRIME_VNDR) AS PRIME_VNDR, 
+                  -- Issue 4: COALESCE ensures vendor is never NULL; UNASSIGNED is the final fallback
+                  COALESCE(d.PRIME_VNDR, ss.PRIME_VNDR, 'UNASSIGNED') AS PRIME_VNDR, 
                   d.ItemDescription, d.UOM,
                   d.Threatened_Clients, d.Client_Exposure_Count, d.First_Stockout_Date, d.Total_Deficit_Qty, d.WFQ_Dependency_Flag, 
-                  ISNULL(ss.LeadDays, 30) AS LeadDays, 
+                  -- Issue 8: Default_Lead_Days from Config (replaces hardcoded 30)
+                  ISNULL(ss.LeadDays, (SELECT Default_Lead_Days FROM Config)) AS LeadDays, 
                   DATEDIFF(DAY, CAST(GETDATE() AS DATE), d.First_Stockout_Date) AS Days_To_Stockout, 
-                  CASE WHEN d.First_Stockout_Date IS NOT NULL AND d.First_Stockout_Date <= DATEADD(DAY, ISNULL(ss.LeadDays, 30), CAST(GETDATE() AS DATE)) THEN 1 ELSE 0 END AS Schedule_Threat
+                  -- Issue 8: Default_Lead_Days from Config for schedule threat window
+                  CASE WHEN d.First_Stockout_Date IS NOT NULL 
+                            AND d.First_Stockout_Date <= DATEADD(DAY, 
+                                    ISNULL(ss.LeadDays, (SELECT Default_Lead_Days FROM Config)), 
+                                    CAST(GETDATE() AS DATE)) 
+                       THEN 1 ELSE 0 END AS Schedule_Threat
     FROM            deficit_rows d 
     LEFT JOIN dbo.ETB_SS_CALC ss ON d.ITEMNMBR = ss.ITEMNMBR AND d.PRIME_VNDR = ss.PRIME_VNDR
 )
