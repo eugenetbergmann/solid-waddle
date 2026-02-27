@@ -33,27 +33,30 @@
                     │   Surface)          │
                     └──────────┬──────────┘
                                │
-          ┌────────────────────┼────────────────────┐
-          ▼                    ▼                    ▼
-┌──────────────────┐  ┌──────────────────┐  ┌──────────────────┐
-│  ETB_RUN_RISK    │  │ ETB_BUYER_CONTROL│  │ ETB_V_CLIENT_295 │
-│  (View 6 —       │  │  (View 7 — Buyer │  │  _STOCKOUTS      │
-│   Executive Risk │  │   PO Consolidation│  │  (View 8 —       │
-│   Dashboard)     │  │   Engine)        │  │   Client 295     │
-└──────────────────┘  └──────────────────┘  │   Stockout       │
-                                             │   Detection)     │
-                                             └──────────────────┘
+                               ▼
+                    ┌──────────────────────┐
+                    │ ETB_V_CLIENT_295     │
+                    │  _STOCKOUTS          │
+                    │  (View 8 —           │
+                    │   Client 295         │
+                    │   Stockout           │
+                    │   Detection)         │
+                    └──────────────────────┘
 ```
 
 **Note**: Views 4 and 5 re-inline the full logic of Views 1–3 as CTEs for
-performance (no view-on-view chaining in the hot path).  Views 6, 7, and 8
-consume `dbo.ETB_PAB_SUPPLY_ACTION` (View 5) and `dbo.ETB_SS_CALC` (View 2).
+performance (no view-on-view chaining in the hot path).  View 8 consumes
+`dbo.ETB_PAB_SUPPLY_ACTION` (View 5) and `dbo.ETB_SS_CALC` (View 2).
+
+Views 6 (`ETB_RUN_RISK`) and 7 (`ETB_BUYER_CONTROL`) have been **removed** —
+they were not actively used and have been superseded by View 8 for control
+layer functionality.
 
 ---
 
 ## Object Catalog
 
-### Core Pipeline Views (pipeline-views/)
+### Pipeline Views (sql/)
 
 | # | Object | Role | Dependencies | Status |
 |---|--------|------|--------------|--------|
@@ -62,14 +65,6 @@ consume `dbo.ETB_PAB_SUPPLY_ACTION` (View 5) and `dbo.ETB_SS_CALC` (View 2).
 | 3 | ETB_WFQ_PIPE | WFQ pipeline source: lot-level quarantine inventory with release estimates | `IV00300`, `IV00101` | Production |
 | 4 | ETB_PAB_WFQ_ADJ | WFQ overlay: stockout detection, extended balance, WFQ status classification | Views 1–3 (re-inlined) + `Prosenthal_INV_BIN_QTY_wQTYTYPE`, `IV10300` | Production |
 | 5 | ETB_PAB_SUPPLY_ACTION | Final decision surface: deficit analysis, PO timing, supply action recommendations | Views 1–4 (re-inlined) | Production |
-
-### Analysis & Control Layer Views (analysis-views/)
-
-| # | Object | Role | Dependencies | Status |
-|---|--------|------|--------------|--------|
-| — | ETB_WC_INV_UNIFIED | WC inventory integration with running balance adjustments | Reference only — logic re-inlined in Views 4 & 5 | Reference |
-| 6 | ETB_RUN_RISK | Executive risk dashboard: stockout timing, client exposure, schedule threats | View 5 + View 2 | Production |
-| 7 | ETB_BUYER_CONTROL | Buyer action queue: PO consolidation, urgency classification, vendor exposure | View 5 + View 2 | Production |
 | 8 | ETB_V_CLIENT_295_STOCKOUTS | Client 295 stockout detection: item/run-level risk with shared demand analysis | View 5 + View 2 + View 4 | Production |
 
 ---
@@ -81,9 +76,7 @@ consume `dbo.ETB_PAB_SUPPLY_ACTION` (View 5) and `dbo.ETB_SS_CALC` (View 2).
 3. **ETB_WFQ_PIPE** (View 3): Provides WFQ supply pipeline data — lot-level quarantine inventory with estimated release dates
 4. **ETB_PAB_WFQ_ADJ** (View 4): Extends ledger with WFQ supply coverage, calculates extended balances, classifies WFQ dependency status
 5. **ETB_PAB_SUPPLY_ACTION** (View 5): Evaluates supply adequacy, generates action recommendations (SUFFICIENT/ORDER/BOTH/REVIEW_REQUIRED)
-6. **ETB_RUN_RISK** (View 6): Compresses demand rows into risk signals per item/vendor — answers WHERE/WHEN/WHO/HOW
-7. **ETB_BUYER_CONTROL** (View 7): Groups deficit demand into PO recommendations with urgency classification and EOQ optimization
-8. **ETB_V_CLIENT_295_STOCKOUTS** (View 8): Scopes stockout detection to Client 295 with market-wide demand context
+6. **ETB_V_CLIENT_295_STOCKOUTS** (View 8): Scopes stockout detection to Client 295 with market-wide demand context
 
 ---
 
@@ -136,15 +129,14 @@ WITH Config AS (
 ## Directory Structure
 
 ```
-pipeline-views/    ← CANONICAL SOURCE for Views 1–5
-analysis-views/    ← Analysis & control layer views (WC Unified, Views 6, 7, 8)
-docs/              ← Architecture documentation (this file)
-decisions/         ← Memory system (decisions.jsonl, experiences.jsonl)
-plans/archive/     ← Archived planning documents
-SKILL.md           ← Quick-start context for agents and developers
-validate.sh        ← Pre-commit validation script (14 Ralph Loop checkpoints)
+sql/           ← SINGLE SOURCE OF TRUTH for all 6 views (Views 1–5, 8)
+docs/          ← Architecture documentation (this file)
+decisions/     ← Memory system (decisions.jsonl, experiences.jsonl)
+plans/archive/ ← Archived planning documents
+SKILL.md       ← Quick-start context for agents and developers
+validate.sh    ← Pre-commit validation script (14 Ralph Loop checkpoints)
 ```
 
-**Rule**: `pipeline-views/` is the single source of truth for Views 1–5.
-`analysis-views/` is the single source of truth for Views 6, 7, and 8.
-The `sql/` directory has been removed (Session 4 — 2026-02-27).
+**Rule**: `sql/` is the single source of truth for all views.
+`pipeline-views/` and `analysis-views/` have been removed (Session 5 — 2026-02-27).
+Views 6 (`ETB_RUN_RISK`) and 7 (`ETB_BUYER_CONTROL`) have been removed — not actively used.
