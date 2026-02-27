@@ -76,20 +76,19 @@ for f in pipeline-views/01_etb_pab_auto.sql \
     fi
 done
 
-# CP-4: sql/ mirrors pipeline-views/ (01-05 must be identical)
+# CP-4: pipeline-views/ is the canonical source — all 5 views present and non-empty
+# (sql/ directory has been removed; pipeline-views/ is now the single source of truth)
 echo ""
-echo "[CP-4] sql/ mirrors pipeline-views/ (01-05 identical)"
+echo "[CP-4] pipeline-views/ canonical source integrity (all 5 views present and non-empty)"
 for n in 01 02 03 04 05; do
     pv_file=$(ls pipeline-views/${n}_*.sql 2>/dev/null | head -1)
-    sql_file=$(ls sql/${n}_*.sql 2>/dev/null | grep -v wc_inv | head -1)
     if [ -z "$pv_file" ]; then
         fail "pipeline-views/${n}_*.sql not found"
-    elif [ -z "$sql_file" ]; then
-        fail "sql/${n}_*.sql not found (excluding wc_inv)"
-    elif diff -q "$pv_file" "$sql_file" > /dev/null 2>&1; then
-        pass "$(basename $pv_file) == $(basename $sql_file)"
+    elif [ ! -s "$pv_file" ]; then
+        fail "$(basename $pv_file) is empty"
     else
-        fail "$(basename $pv_file) DIFFERS from $(basename $sql_file) — run: cp $pv_file $sql_file"
+        LINE_COUNT=$(wc -l < "$pv_file")
+        pass "$(basename $pv_file) present ($LINE_COUNT lines)"
     fi
 done
 

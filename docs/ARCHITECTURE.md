@@ -63,20 +63,14 @@ consume `dbo.ETB_PAB_SUPPLY_ACTION` (View 5) and `dbo.ETB_SS_CALC` (View 2).
 | 4 | ETB_PAB_WFQ_ADJ | WFQ overlay: stockout detection, extended balance, WFQ status classification | Views 1–3 (re-inlined) + `Prosenthal_INV_BIN_QTY_wQTYTYPE`, `IV10300` | Production |
 | 5 | ETB_PAB_SUPPLY_ACTION | Final decision surface: deficit analysis, PO timing, supply action recommendations | Views 1–4 (re-inlined) | Production |
 
-### Control Layer Views (sql/ only)
+### Analysis & Control Layer Views (analysis-views/)
 
 | # | Object | Role | Dependencies | Status |
 |---|--------|------|--------------|--------|
+| — | ETB_WC_INV_UNIFIED | WC inventory integration with running balance adjustments | Reference only — logic re-inlined in Views 4 & 5 | Reference |
 | 6 | ETB_RUN_RISK | Executive risk dashboard: stockout timing, client exposure, schedule threats | View 5 + View 2 | Production |
 | 7 | ETB_BUYER_CONTROL | Buyer action queue: PO consolidation, urgency classification, vendor exposure | View 5 + View 2 | Production |
 | 8 | ETB_V_CLIENT_295_STOCKOUTS | Client 295 stockout detection: item/run-level risk with shared demand analysis | View 5 + View 2 + View 4 | Production |
-
-### Analysis Views (analysis-views/)
-
-| # | Object | Role | Notes |
-|---|--------|------|-------|
-| — | ETB_WC_INV_UNIFIED | WC inventory integration with running balance adjustments | Reference only — logic re-inlined in Views 4 & 5 |
-| 8 | ETB_V_CLIENT_295_STOCKOUTS | Client 295 stockout detection | Canonical copy in `analysis-views/`; deployment copy in `sql/` |
 
 ---
 
@@ -143,13 +137,14 @@ WITH Config AS (
 
 ```
 pipeline-views/    ← CANONICAL SOURCE for Views 1–5
-analysis-views/    ← Analysis views (WC Unified, Client 295)
-sql/               ← DEPLOYMENT COPIES (mirrors pipeline-views/ + analysis-views/)
+analysis-views/    ← Analysis & control layer views (WC Unified, Views 6, 7, 8)
 docs/              ← Architecture documentation (this file)
 decisions/         ← Memory system (decisions.jsonl, experiences.jsonl)
+plans/archive/     ← Archived planning documents
 SKILL.md           ← Quick-start context for agents and developers
+validate.sh        ← Pre-commit validation script (14 Ralph Loop checkpoints)
 ```
 
-**Rule**: `sql/01–05` must always be identical to `pipeline-views/01–05`.
-`sql/02_etb_wc_inv_unified.sql` must always be identical to
-`analysis-views/02_etb_wc_inv_unified.sql`.
+**Rule**: `pipeline-views/` is the single source of truth for Views 1–5.
+`analysis-views/` is the single source of truth for Views 6, 7, and 8.
+The `sql/` directory has been removed (Session 4 — 2026-02-27).

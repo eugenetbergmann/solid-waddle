@@ -8,7 +8,7 @@ data into actionable executive and buyer intelligence.  All three consume
 
 ---
 
-## View 6: [`dbo.ETB_RUN_RISK`](../sql/06_etb_run_risk.sql)
+## View 6: [`dbo.ETB_RUN_RISK`](../analysis-views/06_etb_run_risk.sql)
 
 **Risk aggregation engine for planner + executive visibility**
 
@@ -52,7 +52,7 @@ ORDER BY Total_Deficit_Qty DESC;
 
 ---
 
-## View 7: [`dbo.ETB_BUYER_CONTROL`](../sql/07_etb_buyer_control.sql)
+## View 7: [`dbo.ETB_BUYER_CONTROL`](../analysis-views/07_etb_buyer_control.sql)
 
 **PO consolidation and buyer action engine**
 
@@ -102,7 +102,7 @@ ORDER BY Total_Exposure DESC;
 
 ---
 
-## View 8: [`dbo.ETB_V_CLIENT_295_STOCKOUTS`](../sql/08_etb_v_client_295_stockouts.sql)
+## View 8: [`dbo.ETB_V_CLIENT_295_STOCKOUTS`](../analysis-views/08_etb_v_client_295_stockouts.sql)
 
 **Client 295 stockout detection with shared demand analysis**
 
@@ -190,15 +190,15 @@ dbo.ETB_PAB_WFQ_ADJ (View 4 — WFQ vendor fallback for View 8)
 ## Deployment
 
 ### Prerequisites
-- [`dbo.ETB_PAB_SUPPLY_ACTION`](../sql/05_etb_pab_supply_action.sql) must exist (View 5)
+- [`dbo.ETB_PAB_SUPPLY_ACTION`](../pipeline-views/05_etb_pab_supply_action.sql) must exist (View 5)
 - `dbo.ETB_SS_CALC` must exist (View 2)
 - `dbo.ETB_PAB_WFQ_ADJ` must exist (View 4) — required by View 8 vendor fallback
 
 ### Installation
 Execute in sequence:
-1. [`sql/06_etb_run_risk.sql`](../sql/06_etb_run_risk.sql)
-2. [`sql/07_etb_buyer_control.sql`](../sql/07_etb_buyer_control.sql)
-3. [`sql/08_etb_v_client_295_stockouts.sql`](../sql/08_etb_v_client_295_stockouts.sql)
+1. [`analysis-views/06_etb_run_risk.sql`](../analysis-views/06_etb_run_risk.sql)
+2. [`analysis-views/07_etb_buyer_control.sql`](../analysis-views/07_etb_buyer_control.sql)
+3. [`analysis-views/08_etb_v_client_295_stockouts.sql`](../analysis-views/08_etb_v_client_295_stockouts.sql)
 
 ### Validation
 ```sql
@@ -271,9 +271,9 @@ The implementation is correct when:
 
 These views answer three fundamental questions:
 
-1. **WHERE will we fail?** → [`ETB_RUN_RISK`](../sql/06_etb_run_risk.sql)
-2. **WHAT do we order?** → [`ETB_BUYER_CONTROL`](../sql/07_etb_buyer_control.sql)
-3. **IS CLIENT 295 AT RISK?** → [`ETB_V_CLIENT_295_STOCKOUTS`](../sql/08_etb_v_client_295_stockouts.sql)
+1. **WHERE will we fail?** → [`ETB_RUN_RISK`](../analysis-views/06_etb_run_risk.sql)
+2. **WHAT do we order?** → [`ETB_BUYER_CONTROL`](../analysis-views/07_etb_buyer_control.sql)
+3. **IS CLIENT 295 AT RISK?** → [`ETB_V_CLIENT_295_STOCKOUTS`](../analysis-views/08_etb_v_client_295_stockouts.sql)
 
 No algebra. No theory. No debate.
 
