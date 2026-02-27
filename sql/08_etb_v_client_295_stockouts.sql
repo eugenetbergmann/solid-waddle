@@ -52,10 +52,35 @@ Change Log:
               ETB_BUYER_CONTROL); added UNASSIGNED vendor fallback (Issue 4);
               added Data_Quality_Flag (Issue 5); updated header documentation
               to reflect 6-view pipeline (Issues 10, removed-views cleanup).
+  2026-02-27: Added Config CTE for named thresholds (Issue 8 — centralises
+              the Pattern A suppression status strings and client scope).
 ================================================================================
 */
 
 WITH
+
+-- ============================================================================
+-- Config: Named threshold constants (Issue 8)
+-- ============================================================================
+-- Pattern A suppression status strings are referenced in multiple WHERE clauses.
+-- Centralising them prevents silent divergence if the status text ever changes.
+-- ============================================================================
+Config AS (
+    SELECT
+        -- The client construct code scoped by this view
+        '295'                                           AS Client_Construct,
+
+        -- Pattern A suppression status values excluded from demand calculation
+        'BEGINNING BALANCE'                             AS Status_Beg_Bal,
+        'SUPPRESSED: Stale & Unissued'                  AS Status_Stale,
+        'SUPPRESSED: Full Coverage in Fence'            AS Status_Fence,
+
+        -- Report type constant emitted in every output row
+        'CLIENT_295_STOCKOUT_MONITOR'                   AS Report_Type_Label,
+
+        -- Vendor fallback value when all three source joins return NULL
+        'UNASSIGNED'                                    AS Vendor_Fallback
+),
 
 -- ============================================================================
 -- STEP 1: Base Demand Data for Client 295
@@ -103,14 +128,14 @@ Client295_Demand AS
     FROM    dbo.ETB_PAB_SUPPLY_ACTION
 
     WHERE
-        -- Client 295 only
-        Construct = '295'
+        -- Issue 8: Client_Construct from Config (replaces hardcoded '295')
+        Construct = (SELECT Client_Construct FROM Config)
 
-        -- Exclude Pattern A noise (suppression audit trail from View 2/5)
+        -- Exclude Pattern A noise — Issue 8: suppression labels sourced from Config
         AND Suppression_Status NOT IN (
-                'BEGINNING BALANCE',
-                'SUPPRESSED: Stale & Unissued',
-                'SUPPRESSED: Full Coverage in Fence'
+                (SELECT Status_Beg_Bal FROM Config),
+                (SELECT Status_Stale   FROM Config),
+                (SELECT Status_Fence   FROM Config)
             )
 
         -- Require a valid due date
@@ -157,11 +182,11 @@ AllCustomers_Demand AS
                   AND  c.Demand_Week = DATEPART(ISO_WEEK, sa.Demand_Due_Date)
             )
 
-            -- Apply the same Pattern A suppression to all customers
+            -- Apply the same Pattern A suppression — Issue 8: labels from Config
             AND sa.Suppression_Status NOT IN (
-                    'BEGINNING BALANCE',
-                    'SUPPRESSED: Stale & Unissued',
-                    'SUPPRESSED: Full Coverage in Fence'
+                    (SELECT Status_Beg_Bal FROM Config),
+                    (SELECT Status_Stale   FROM Config),
+                    (SELECT Status_Fence   FROM Config)
                 )
 
             AND sa.Demand_Due_Date IS NOT NULL
@@ -379,7 +404,8 @@ Final_Output AS
             MAX(ss.PRIME_VNDR),     -- Priority 1: Safety stock calc vendor
             MAX(c.PRIME_VNDR),      -- Priority 2: Supply action vendor (may be UNASSIGNED)
             MAX(wfq.PRIME_VNDR),    -- Priority 3: WFQ adjustment vendor
-            'UNASSIGNED'            -- Issue 4: explicit fallback (no more NULLs)
+            -- Issue 4 + Issue 8: Vendor_Fallback from Config (replaces hardcoded 'UNASSIGNED')
+            (SELECT Vendor_Fallback FROM Config)
         )                                                       AS Primary_Vendor,
 
         MAX(c.Vendor_Item_Number)                               AS Vendor_Item_Number,
@@ -399,7 +425,8 @@ Final_Output AS
         -- Metadata
         -- ----------------------------------------------------------------
         CAST(GETDATE() AS date)                                 AS Analysis_Date,
-        'CLIENT_295_STOCKOUT_MONITOR'                           AS Report_Type
+        -- Issue 8: Report_Type_Label from Config (replaces hardcoded string constant)
+        (SELECT Report_Type_Label FROM Config)                  AS Report_Type
 
     FROM         Stockout_Detection sd
 

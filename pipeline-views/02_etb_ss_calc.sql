@@ -6,12 +6,60 @@
 -- Dependencies: dbo.ReceivingsLineItems, dbo.POP30330, dbo.PHR_MO_CostCalc1,
 --               dbo.ETB_SS
 -- ============================================================================
+/*
+================================================================================
+ETB_SS_CALC — Safety Stock Calculation (Reference View)
+================================================================================
+Purpose:
+  Calculates safety stock quantities and values per item using historical weekly
+  demand variability and series-specific lead times.  Provides SS quantities in
+  both manufacturing UOM and purchasing UOM for downstream views (6, 7, 8).
+
+Source Tables:
+  dbo.ReceivingsLineItems   — Receiving history for average cost derivation
+  dbo.POP30330              — PO unit costs (cost join for receivings)
+  dbo.PHR_MO_CostCalc1      — MO consumption history for demand statistics
+  dbo.ETB_SS                — Safety stock master (item/vendor reference)
+
+Named Thresholds (Config CTE — Issue 8):
+  Lead_Days_Series_30   = 100  days (series 30 items)
+  Lead_Days_Series_10   =  60  days (series 10 items)
+  Lead_Days_Default     =  45  days (all other series)
+  SS_Value_Ceiling      = 20000 (exclude outlier SS values above this)
+  Demand_Lookback_Years =   1  years back from today for demand history
+
+Change Log:
+  2026-02-26: Initial hardening — UNASSIGNED vendor fallback (Issue 4),
+              dynamic demand lookback year (replaces hardcoded 2024/2025).
+  2026-02-27: Added Config CTE for named thresholds (Issue 8 — eliminates
+              magic numbers 100, 60, 45, 20000 scattered through SSCalculation).
+================================================================================
+*/
+
+-- ============================================================================
+-- Config: Named threshold constants (Issue 8 — eliminates magic numbers)
+-- ============================================================================
+WITH Config AS (
+    SELECT
+        -- Lead time by item series (sourced from vendor SLA agreements)
+        100 AS Lead_Days_Series_30,     -- Series 30: long-lead API ingredients
+         60 AS Lead_Days_Series_10,     -- Series 10: intermediate lead items
+         45 AS Lead_Days_Default,       -- All other series: standard lead time
+
+        -- Safety stock value ceiling — items with SSValue above this are
+        -- outliers (data anomalies or intentional exclusions from SS planning)
+        20000 AS SS_Value_Ceiling,
+
+        -- Demand history lookback: YEAR(GETDATE()) - N gives a rolling window
+        -- Value 1 = last 2 calendar years (current year + previous year)
+        1 AS Demand_Lookback_Years
+),
 
 -- ============================================================================
 -- CTE 1: TempAvgCost
 -- Purpose: Calculate average cost from receivings data
 -- ============================================================================
-WITH TempAvgCost AS (
+TempAvgCost AS (
     SELECT 
         r.[Item Number],
         r.[Item Description],
@@ -38,7 +86,7 @@ WITH TempAvgCost AS (
 -- ============================================================================
 -- CTE 2: DemandHistory
 -- Purpose: Aggregate weekly demand from manufacturing history
--- NOTE: Uses dynamic years (last 2 years) instead of hardcoded values
+-- NOTE: Uses Config.Demand_Lookback_Years (rolling window, not hardcoded year)
 -- ============================================================================
 DemandHistory AS (
     SELECT 
@@ -48,7 +96,8 @@ DemandHistory AS (
         SUM(IssueQty) AS WeeklyDemand,
         UoM
     FROM dbo.PHR_MO_CostCalc1
-    WHERE YEAR(IssueDate) >= YEAR(GETDATE()) - 1  -- Dynamic: last 2 years
+    -- Issue 8: Demand_Lookback_Years from Config (replaces hardcoded year 2024)
+    WHERE YEAR(IssueDate) >= YEAR(GETDATE()) - (SELECT Demand_Lookback_Years FROM Config)
     GROUP BY Component, DATEPART(WEEK, IssueDate), YEAR(IssueDate), UoM
 ),
 
@@ -76,13 +125,15 @@ SSCalculation AS (
     SELECT 
         ss.ITEMNMBR,
         ss.VendorItem,
-        COALESCE(NULLIF(ss.PRIME_VNDR, ''), 'UNASSIGNED') AS PRIME_VNDR,  -- NULL vendor handling
-        -- Lead time based on item series
+        COALESCE(NULLIF(ss.PRIME_VNDR, ''), 'UNASSIGNED') AS PRIME_VNDR,  -- Issue 4: NULL vendor handling
+
+        -- Issue 8: Lead time sourced from Config CTE (replaces scattered magic numbers)
         CASE 
-            WHEN ss.ITEMNMBR LIKE '30.%' THEN 100
-            WHEN ss.ITEMNMBR LIKE '10.%' THEN 60
-            ELSE 45
+            WHEN ss.ITEMNMBR LIKE '30.%' THEN (SELECT Lead_Days_Series_30 FROM Config)
+            WHEN ss.ITEMNMBR LIKE '10.%' THEN (SELECT Lead_Days_Series_10 FROM Config)
+            ELSE                               (SELECT Lead_Days_Default   FROM Config)
         END AS LeadDays,
+
         ac.TotalQtyShipped,
         ac.[U Of M] AS PurchasingUOM,
         ac.TotalCost,
@@ -91,18 +142,39 @@ SSCalculation AS (
         ds.StdDevWeekly,
         ds.MaxWeeklyDemand,
         ds.UoM AS MfgUOM,
+
         -- Safety stock in manufacturing UOM
+        -- Formula: 2 × (MaxWeekly - AvgWeekly) × (LeadDays / 7)
         ROUND((2.0 * (ds.MaxWeeklyDemand - ds.AvgWeeklyDemand)) 
-              * ((CASE WHEN ss.ITEMNMBR LIKE '30.%' THEN 100 WHEN ss.ITEMNMBR LIKE '10.%' THEN 60 ELSE 45 END) / 7.0), 0) AS CalculatedSS_MfgUOM,
-        -- Safety stock value
+              * (CAST(
+                    CASE WHEN ss.ITEMNMBR LIKE '30.%' THEN (SELECT Lead_Days_Series_30 FROM Config)
+                         WHEN ss.ITEMNMBR LIKE '10.%' THEN (SELECT Lead_Days_Series_10 FROM Config)
+                         ELSE                              (SELECT Lead_Days_Default   FROM Config)
+                    END
+                AS FLOAT) / 7.0), 0) AS CalculatedSS_MfgUOM,
+
+        -- Safety stock value = CalculatedSS_MfgUOM × AverageCost
         ROUND((2.0 * (ds.MaxWeeklyDemand - ds.AvgWeeklyDemand)) 
-              * ((CASE WHEN ss.ITEMNMBR LIKE '30.%' THEN 100 WHEN ss.ITEMNMBR LIKE '10.%' THEN 60 ELSE 45 END) / 7.0) * ac.AverageCost, 2) AS SSValue,
-        -- UOM conversion factor
+              * (CAST(
+                    CASE WHEN ss.ITEMNMBR LIKE '30.%' THEN (SELECT Lead_Days_Series_30 FROM Config)
+                         WHEN ss.ITEMNMBR LIKE '10.%' THEN (SELECT Lead_Days_Series_10 FROM Config)
+                         ELSE                              (SELECT Lead_Days_Default   FROM Config)
+                    END
+                AS FLOAT) / 7.0) * ac.AverageCost, 2) AS SSValue,
+
+        -- UOM conversion factor: manufacturing qty per purchasing unit
         ROUND(CAST(ds.TotalDemand AS FLOAT) / NULLIF(ac.TotalQtyShipped, 0), 2) AS PURUOM,
-        -- Safety stock in purchasing UOM
+
+        -- Safety stock in purchasing UOM = CEILING(CalculatedSS_MfgUOM / PURUOM)
         CEILING(CAST(ROUND((2.0 * (ds.MaxWeeklyDemand - ds.AvgWeeklyDemand)) 
-              * ((CASE WHEN ss.ITEMNMBR LIKE '30.%' THEN 100 WHEN ss.ITEMNMBR LIKE '10.%' THEN 60 ELSE 45 END) / 7.0), 0) AS FLOAT) 
+              * (CAST(
+                    CASE WHEN ss.ITEMNMBR LIKE '30.%' THEN (SELECT Lead_Days_Series_30 FROM Config)
+                         WHEN ss.ITEMNMBR LIKE '10.%' THEN (SELECT Lead_Days_Series_10 FROM Config)
+                         ELSE                              (SELECT Lead_Days_Default   FROM Config)
+                    END
+                AS FLOAT) / 7.0), 0) AS FLOAT)
               / NULLIF(ROUND(CAST(ds.TotalDemand AS FLOAT) / NULLIF(ac.TotalQtyShipped, 0), 2), 0)) AS CalculatedSS_PurchasingUOM
+
     FROM dbo.ETB_SS AS ss
     INNER JOIN TempAvgCost AS ac ON ss.ITEMNMBR = ac.[Item Number]
     LEFT OUTER JOIN DemandStats AS ds ON ss.ITEMNMBR = ds.Component
@@ -133,5 +205,6 @@ SELECT
     PURUOM, 
     CalculatedSS_PurchasingUOM
 FROM SSCalculation
-WHERE SSValue <= 20000
+-- Issue 8: SS_Value_Ceiling from Config (replaces hardcoded 20000)
+WHERE SSValue <= (SELECT SS_Value_Ceiling FROM Config)
 ORDER BY ITEMNMBR;
