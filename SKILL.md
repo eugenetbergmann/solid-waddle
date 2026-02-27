@@ -18,29 +18,27 @@ pipeline-views/           ← CANONICAL SOURCE (5-view core pipeline)
   04_etb_pab_wfq_adj.sql  ← View 4: WFQ overlay + extended balance
   05_etb_pab_supply_action.sql ← View 5: Supply action decision surface
 
-analysis-views/           ← CLIENT-SPECIFIC ANALYSIS VIEWS
+analysis-views/           ← ANALYSIS & CONTROL LAYER VIEWS
   02_etb_wc_inv_unified.sql    ← WC inventory integration (reference)
-  08_etb_v_client_295_stockouts.sql ← Client 295 stockout detection
-
-sql/                      ← DEPLOYMENT COPIES (mirrors pipeline-views/ + analysis)
-  01–05: identical to pipeline-views/
-  02_etb_wc_inv_unified.sql: identical to analysis-views/
-  06_etb_run_risk.sql     ← View 6: Executive risk dashboard
-  07_etb_buyer_control.sql ← View 7: Buyer PO consolidation engine
-  08_etb_v_client_295_stockouts.sql ← View 8 (same as analysis-views/)
-  ETB_SS_CALC             ← Safety stock query (reference)
+  06_etb_run_risk.sql          ← View 6: Executive risk dashboard
+  07_etb_buyer_control.sql     ← View 7: Buyer PO consolidation engine
+  08_etb_v_client_295_stockouts.sql ← View 8: Client 295 stockout detection
 
 docs/
   ARCHITECTURE.md         ← View hierarchy and dependency diagram
-  CONTROL_LAYER.md        ← Views 6 & 7 executive summary
+  CONTROL_LAYER.md        ← Views 6, 7 & 8 executive summary
   DEPLOYMENT.md           ← Installation sequence
 
 decisions/
   decisions.jsonl         ← Append-only decision log (one JSON object per line)
   experiences.jsonl       ← Append-only experience log (lessons learned)
 
-solid-waddle-memory/      ← (legacy path — use decisions/ instead)
+plans/
+  archive/                ← Archived/completed planning documents
 ```
+
+**Note**: The `sql/` directory has been removed (Session 4). `pipeline-views/` is the
+single source of truth for Views 1–5. Views 6, 7, and 8 live in `analysis-views/`.
 
 ---
 
@@ -144,9 +142,9 @@ All three consume `dbo.ETB_PAB_SUPPLY_ACTION` (View 5) and `dbo.ETB_SS_CALC`.
 - **NEVER** use `ISNUMERIC` — use `TRY_CAST`
 - **ALWAYS** include `Config AS` CTE for business thresholds
 - **ALWAYS** use `COALESCE(NULLIF(PRIME_VNDR,''), 'UNASSIGNED')` fallback
-- **NEVER** modify `pipeline-views/` without also updating `sql/` (or vice versa)
-- `pipeline-views/` is the **canonical source** — `sql/01-05` must mirror it exactly
-- `sql/06`, `sql/07`, `sql/08` are control-layer views with no `pipeline-views/` counterpart
+- `pipeline-views/` is the **canonical source** for Views 1–5 — no `sql/` directory exists
+- Views 6, 7, and 8 live in `analysis-views/` — deploy from there
+- Run `validate.sh` before every commit (pre-commit hook installed)
 
 ---
 

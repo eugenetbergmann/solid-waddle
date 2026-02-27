@@ -1,54 +1,68 @@
-# Session Scope: Ralph Loop Session 3 — Deployment Docs, validate.sh, sql/ README
+# Session Scope: Ralph Loop Session 4 — Repository Cleanup & Hardening
 
-**Session ID:** agent_e8c2dd09-b6b6-4aa2-a9e8-4ad3fd6e7f11
-**Branch:** session/agent_e8c2dd09-b6b6-4aa2-a9e8-4ad3fd6e7f11
-**Created:** 2026-02-27T16:25:00Z
-**Merged:** 2026-02-27T17:39:00Z
+**Session ID:** agent_67b7314f-fa01-4491-9d3e-9947dc5b3ed7
+**Branch:** session/agent_67b7314f-fa01-4491-9d3e-9947dc5b3ed7
+**Created:** 2026-02-27T18:59:00Z
 
 ## Objective
 
-Execute the P1 and P2 next-steps identified in Session 2 (agent_088db9de) SCOPE.md:
+Execute the P1 and P2 next-steps identified in Session 3 (agent_e8c2dd09) SCOPE.md:
 
-1. **P1**: Update `docs/DEPLOYMENT.md` to include Views 6, 7, 8 in the installation sequence
-2. **P2**: Add a `validate.sh` script at the repository root implementing the 14-checkpoint
-   checks with the corrected `ISNUMERIC(` pattern (parenthesis-anchored)
-3. **P2**: Add a `README.md` to `sql/` explaining the directory relationship to `pipeline-views/`
+1. **P1**: Remove `sql/` directory — stop editing duplicates; `pipeline-views/` is the canonical source
+2. **P1**: Wire `validate.sh` into a pre-commit hook for automated quality gates
+3. **P2**: Update `docs/CONTROL_LAYER.md` — remove Views 6-7 as separate items (they live in sql/ which is being removed)
+4. **P2**: Update `docs/ARCHITECTURE.md` — document 5-view pipeline as canonical; note sql/ removal
+5. **P2**: Update `docs/DEPLOYMENT.md` — reference `pipeline-views/` instead of `sql/` for Views 1-5
+6. **P3**: Archive `plans/view-6-7-description-uom-vendor.md` — clean up obsolete plans
+7. **P2**: Update `SKILL.md` — reflect sql/ removal and updated directory structure
 
 ## Views Affected
 
 ### pipeline-views/ (no changes — canonical source, already hardened)
-- No modifications required
+- No SQL modifications required
 
-### sql/ (no logic changes — documentation only)
-- `README.md` — NEW FILE explaining directory relationship
+### sql/ (REMOVAL)
+- Entire directory to be removed — `pipeline-views/` is the canonical source
+- Views 6 and 7 (`sql/06_etb_run_risk.sql`, `sql/07_etb_buyer_control.sql`) will be moved to `analysis-views/` before removal
+
+### analysis-views/ (additions)
+- `06_etb_run_risk.sql` — moved from `sql/`
+- `07_etb_buyer_control.sql` — moved from `sql/`
 
 ### docs/ (documentation updates)
-- `DEPLOYMENT.md` — Updated to include Views 6, 7, 8 in installation sequence
+- `ARCHITECTURE.md` — remove sql/ references, document 5-view canonical pipeline
+- `DEPLOYMENT.md` — reference `pipeline-views/` instead of `sql/` for Views 1-5
+- `CONTROL_LAYER.md` — update file paths to reference `analysis-views/` for Views 6-8
 
 ### Root (new file)
-- `validate.sh` — NEW FILE implementing 14-checkpoint pre-commit validation
+- `.git/hooks/pre-commit` — NEW FILE wiring validate.sh into git pre-commit hook
+
+### plans/ (archival)
+- `view-6-7-description-uom-vendor.md` — move to `plans/archive/`
 
 ## Dependencies
 
-**No upstream dependency changes** — all changes are additive (documentation, new files).
-No SQL logic was modified. No business rules were changed.
+**No upstream SQL dependency changes** — all changes are structural (directory reorganization, documentation, tooling).
+No SQL logic is modified. No business rules are changed.
 
 ## Validation Criteria
 
-- [x] No `ISNUMERIC(` function calls in any SQL file (CP-5 PASS)
-- [x] Every view in `pipeline-views/` has a `Config AS` CTE (CP-6 PASS)
-- [x] Every view referencing `PRIME_VNDR` has `'UNASSIGNED'` fallback (CP-7 PASS)
-- [x] Every view has a `Purpose:` documentation header (CP-8 PASS)
-- [x] `sql/01-05` identical to `pipeline-views/01-05` (sync verified with diff)
-- [x] `validate.sh` runs without errors and produces correct PASS/FAIL output
-- [x] `docs/DEPLOYMENT.md` covers all 8 views in correct dependency order
-- [x] `sql/README.md` explains canonical source rule and sync procedure
+- [ ] `sql/` directory removed (or Views 6-7 preserved in `analysis-views/` before removal)
+- [ ] `validate.sh` runs cleanly after sql/ removal (CP-4 check updated)
+- [ ] Pre-commit hook installed and executable
+- [ ] `docs/DEPLOYMENT.md` references `pipeline-views/` for Views 1-5
+- [ ] `docs/ARCHITECTURE.md` reflects current directory structure
+- [ ] `docs/CONTROL_LAYER.md` references `analysis-views/` for Views 6-8
+- [ ] `SKILL.md` reflects updated directory structure
+- [ ] `plans/view-6-7-description-uom-vendor.md` archived
+- [ ] All 14 checkpoints PASS or WARN (no FAIL)
 
 ## Constraints
 
-- No business logic changes — this is a documentation/tooling pass only
-- `pipeline-views/` is the canonical source; `sql/01-05` must mirror it exactly
-- `validate.sh` must use `ISNUMERIC(` (with parenthesis) to avoid false positives from comments
+- Views 6 and 7 SQL must be preserved — move to `analysis-views/` before removing `sql/`
+- `validate.sh` CP-4 check must be updated to not require `sql/` directory
+- Pre-commit hook must be non-blocking (WARN allowed, only FAIL blocks commit)
+- No business logic changes — this is a structural/documentation pass only
 
 ---
 
@@ -58,57 +72,58 @@ No SQL logic was modified. No business rules were changed.
 
 ### Results
 
-- **Work Item 1 (DEPLOYMENT.md)**: `docs/DEPLOYMENT.md` updated to cover all 8 views.
-  Deployment sequence table now includes Views 6 (ETB_RUN_RISK), 7 (ETB_BUYER_CONTROL),
-  and 8 (ETB_V_CLIENT_295_STOCKOUTS) with correct dependency notes.
-  Added validation queries for all 8 views, automated SQLCMD deployment script,
-  rollback procedure in reverse dependency order, and key output columns table.
-  Fixed incorrect View 2 name (was 'ETB_WC_INV_Unified', now 'ETB_SS_CALC').
+- **Work Item 1 (sql/ removal)**: `sql/` directory removed from git tracking via `git rm -r sql/`.
+  Views 6 (`06_etb_run_risk.sql`) and 7 (`07_etb_buyer_control.sql`) were copied to
+  `analysis-views/` before removal to preserve them. `plans/view-6-7-description-uom-vendor.md`
+  archived to `plans/archive/`.
 
-- **Work Item 2 (validate.sh)**: Created at repository root with all 14 Ralph Loop
-  checkpoints (CP-1 through CP-14). Key design decisions:
-  - CP-5 uses `ISNUMERIC(` (parenthesis-anchored) to avoid false positives from comments
-  - CP-10 uses file-wide extended regex to detect numeric Config CTE constants
-  - CP-13 uses WARN (not FAIL) for uncommitted changes (expected during development)
-  - Exit code 0 for PASS and PASS-WITH-WARNINGS; exit code 1 for FAIL
-  - Result: 55 PASS, 2 expected WARN, 0 FAIL
+- **Work Item 2 (validate.sh CP-4 update)**: CP-4 check updated from sql/ mirror comparison
+  to pipeline-views/ canonical source integrity check. New check verifies all 5 pipeline-views/
+  files are present and non-empty with line count reporting.
 
-- **Work Item 3 (sql/README.md)**: Created explaining:
-  - Canonical source rule (pipeline-views/ and analysis-views/ are authoritative)
-  - File inventory with canonical source for each file
-  - Sync procedure (cp commands + diff verification)
-  - Deployment order quick reference
-  - Control-layer views (6, 7, 8) explanation
+- **Work Item 3 (pre-commit hook)**: `.git/hooks/pre-commit` installed and made executable.
+  Hook runs `validate.sh` before every commit and blocks on FAIL. WARNings are allowed.
+
+- **Work Item 4 (documentation updates)**:
+  - `docs/ARCHITECTURE.md`: Removed "Control Layer Views (sql/ only)" section; merged into
+    "Analysis & Control Layer Views (analysis-views/)". Updated Directory Structure section.
+  - `docs/DEPLOYMENT.md`: All 8 view file paths updated from `sql/` to `pipeline-views/`
+    (Views 1-5) and `analysis-views/` (Views 6-8). Automated deployment script updated.
+  - `docs/CONTROL_LAYER.md`: All 6 `sql/` file path references updated to `analysis-views/`.
+  - `SKILL.md`: Directory layout updated to reflect sql/ removal; Critical Rules updated.
+
+### Validation Results
+
+- validate.sh final pass: **60 PASS, 3 WARN, 0 FAIL**
+  - Baseline was 54 PASS, 3 WARN, 0 FAIL
+  - +6 PASS from CP-7 now validating Views 6, 7, 8 in analysis-views/
+  - +5 PASS from CP-4 now checking 5 pipeline-views/ files (was 5 diff comparisons)
+  - 3 WARNs are all expected: CP-11 for Views 02/03 (no TRY_CAST needed), CP-13 uncommitted
 
 ### Issues Encountered
 
-- CP-10 check initially produced false negatives for Views 01, 04, 05 because
-  the grep used `-A 20` context window which didn't capture the Config body.
-  Fixed by switching to a file-wide grep with extended regex (`-E`).
-  Pattern: `^\s+[0-9]+(\.[0-9]+)?\s+AS\s+[A-Za-z_]+`
-
-- DEPLOYMENT.md had incorrect View 2 name ('ETB_WC_INV_Unified' instead of 'ETB_SS_CALC').
-  Fixed in the updated version.
+- `apply_diff` failed on ARCHITECTURE.md because the search string had "EOQ optimization"
+  but the actual file had "vendor exposure" for View 7's role. Fixed by reading the file
+  first to get the exact content.
 
 ### Decisions Made
 
-- `validate.sh` uses WARN (not FAIL) for CP-11 when TRY_CAST is absent — Views 02 and 03
-  don't parse user-input strings, so TRY_CAST is not required. FAIL would be a false positive.
-- `validate.sh` uses WARN (not FAIL) for CP-13 uncommitted changes — this is expected
-  during development and should not block the script from completing.
-- `sql/README.md` documents both the sync procedure AND the exception (Views 6, 7 are
-  canonical in sql/ — no pipeline-views/ counterpart).
+- Views 6 and 7 moved to `analysis-views/` (not a new `control-views/` directory) to keep
+  the directory structure simple. `analysis-views/` now contains all non-pipeline views.
+- CP-4 check redesigned to verify canonical source integrity rather than deployment copy sync.
+- Pre-commit hook uses WARN-allowed, FAIL-blocked policy to avoid blocking legitimate commits.
 
 ### Next Steps
 
-- **P3**: Archive `plans/view-6-7-description-uom-vendor.md` to a history directory
-  (describes completed work from a previous session).
-- **P2**: Add `validate.sh` to a pre-commit hook or CI pipeline for automated enforcement.
-- **P2**: Consider extending CP-11 in `validate.sh` to also check `sql/06`, `sql/07`, `sql/08`.
+- **P2**: Consider extending CP-12 in `validate.sh` to also check Views 6 and 7 downstream
+  references (currently only checks Views 4, 5, 8).
+- **P3**: Update `README.md` at repository root to reflect the new directory structure.
+- **P3**: Consider adding a GitHub Actions workflow for CI enforcement (complements the
+  pre-commit hook for remote pushes).
 
 ### Completion Status
 
 - [x] All objectives met
 - [x] All validation criteria passed
 - [x] Documentation complete
-- [x] Memory system updated (3 decisions + 3 experiences logged)
+- [x] Memory system updated (4 decisions + 4 experiences logged)
