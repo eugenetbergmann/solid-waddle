@@ -11,22 +11,17 @@ SQL view.
 ## Repository Layout
 
 ```
-pipeline-views/           ← CANONICAL SOURCE (5-view core pipeline)
+sql/                      ← SINGLE SOURCE OF TRUTH (all 6 views)
   01_etb_pab_auto.sql     ← View 1: PAB ledger foundation
   02_etb_ss_calc.sql      ← View 2: Safety stock calculation
   03_etb_wfq_pipe.sql     ← View 3: WFQ supply pipeline
   04_etb_pab_wfq_adj.sql  ← View 4: WFQ overlay + extended balance
   05_etb_pab_supply_action.sql ← View 5: Supply action decision surface
-
-analysis-views/           ← ANALYSIS & CONTROL LAYER VIEWS
-  02_etb_wc_inv_unified.sql    ← WC inventory integration (reference)
-  06_etb_run_risk.sql          ← View 6: Executive risk dashboard
-  07_etb_buyer_control.sql     ← View 7: Buyer PO consolidation engine
   08_etb_v_client_295_stockouts.sql ← View 8: Client 295 stockout detection
 
 docs/
   ARCHITECTURE.md         ← View hierarchy and dependency diagram
-  CONTROL_LAYER.md        ← Views 6, 7 & 8 executive summary
+  CONTROL_LAYER.md        ← View 8 executive summary
   DEPLOYMENT.md           ← Installation sequence
 
 decisions/
@@ -37,12 +32,13 @@ plans/
   archive/                ← Archived/completed planning documents
 ```
 
-**Note**: The `sql/` directory has been removed (Session 4). `pipeline-views/` is the
-single source of truth for Views 1–5. Views 6, 7, and 8 live in `analysis-views/`.
+**Note**: `sql/` is the single source of truth for all 6 views (Views 1–5 and 8).
+`pipeline-views/` and `analysis-views/` have been removed (Session 5).
+Views 6 (`ETB_RUN_RISK`) and 7 (`ETB_BUYER_CONTROL`) have been removed — not actively used.
 
 ---
 
-## The 5-View Pipeline (pipeline-views/)
+## The 6-View Pipeline (sql/)
 
 ```
 View 1: ETB_PAB_AUTO
@@ -54,23 +50,13 @@ View 3: ETB_WFQ_PIPE
 View 4: ETB_PAB_WFQ_ADJ
   ↓ (WFQ overlay: stockout detection, extended balance, WFQ status)
 View 5: ETB_PAB_SUPPLY_ACTION
-  → SUFFICIENT / ORDER / BOTH / REVIEW_REQUIRED per demand row
+  ↓ SUFFICIENT / ORDER / BOTH / REVIEW_REQUIRED per demand row
+View 8: ETB_V_CLIENT_295_STOCKOUTS
+  → Client 295 stockout detection with shared demand analysis
 ```
 
 Views 4 and 5 re-inline the full logic of Views 1–3 as CTEs for performance
 (no view-on-view chaining in the hot path).
-
----
-
-## The Control Layer (sql/ only)
-
-```
-View 6: ETB_RUN_RISK        ← Aggregates View 5 → risk per item/vendor
-View 7: ETB_BUYER_CONTROL   ← Aggregates View 5 → PO recommendations
-View 8: ETB_V_CLIENT_295_STOCKOUTS ← Client 295 stockout detection
-```
-
-All three consume `dbo.ETB_PAB_SUPPLY_ACTION` (View 5) and `dbo.ETB_SS_CALC`.
 
 ---
 
@@ -99,7 +85,7 @@ All three consume `dbo.ETB_PAB_SUPPLY_ACTION` (View 5) and `dbo.ETB_SS_CALC`.
 | 2 | ISOLATE | SCOPE.md created with objective, affected views, validation criteria |
 | 3 | ISOLATE | Dependency chain verified (upstream/downstream) |
 | 4 | ISOLATE | Baseline row counts recorded (if live DB available) |
-| 5 | VALIDATE | `grep -r "ISNUMERIC" pipeline-views/` returns empty (comments OK) |
+| 5 | VALIDATE | `grep -r "ISNUMERIC" sql/` returns empty (comments OK) |
 | 6 | VALIDATE | Every modified view has `Config AS` CTE |
 | 7 | VALIDATE | Every `PRIME_VNDR` reference has `'UNASSIGNED'` fallback |
 | 8 | VALIDATE | Every view has `Purpose:` documentation header |
@@ -142,8 +128,8 @@ All three consume `dbo.ETB_PAB_SUPPLY_ACTION` (View 5) and `dbo.ETB_SS_CALC`.
 - **NEVER** use `ISNUMERIC` — use `TRY_CAST`
 - **ALWAYS** include `Config AS` CTE for business thresholds
 - **ALWAYS** use `COALESCE(NULLIF(PRIME_VNDR,''), 'UNASSIGNED')` fallback
-- `pipeline-views/` is the **canonical source** for Views 1–5 — no `sql/` directory exists
-- Views 6, 7, and 8 live in `analysis-views/` — deploy from there
+- `sql/` is the **single source of truth** for all 6 views — no `pipeline-views/` or `analysis-views/` directories
+- Views 6 (`ETB_RUN_RISK`) and 7 (`ETB_BUYER_CONTROL`) have been **removed** — not actively used
 - Run `validate.sh` before every commit (pre-commit hook installed)
 
 ---
@@ -182,4 +168,5 @@ Experience template:
 
 ---
 
-*Version: 1.0 — Created 2026-02-27 by session agent_088db9de*
+*Version: 2.0 — Updated 2026-02-27 by session agent_50bd4285 (Loop 5 — Final Consolidation)*
+*Previous: 1.0 — Created 2026-02-27 by session agent_088db9de*
