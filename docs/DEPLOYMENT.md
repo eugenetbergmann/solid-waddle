@@ -11,7 +11,7 @@ but the underlying database views must still exist before View 8 can reference t
 | 1 | ETB_PAB_AUTO | `sql/01_etb_pab_auto.sql` | Foundation layer — demand normalization, MO matching, UNASSIGNED vendor fallback |
 | 2 | ETB_SS_CALC | `sql/02_etb_ss_calc.sql` | Safety stock reference — lead times, demand statistics, SS quantities |
 | 3 | ETB_WFQ_PIPE | `sql/03_etb_wfq_pipe.sql` | WFQ supply pipeline — lot-level quarantine inventory with release estimates |
-| 4 | ETB_PAB_WFQ_ADJ | `sql/04_etb_pab_wfq_adj.sql` | WFQ overlay — stockout detection, extended balance, WFQ status |
+| 4 | ETB_PAB_WFQ_ADJ | `sql/04_etb_pab_wfq_adj.sql` | WFQ overlay — stockout detection, extended balance, WFQ status. Session 5: Smart quotes fixed, IV10300 stub (no cycle count data), CREATE VIEW removed. |
 | 5 | ETB_PAB_SUPPLY_ACTION | `sql/05_etb_pab_supply_action.sql` | Decision surface — SUFFICIENT/ORDER/BOTH/REVIEW_REQUIRED per demand row |
 | 6 | ETB_V_CLIENT_295_STOCKOUTS | `sql/08_etb_v_client_295_stockouts.sql` | Client 295 stockout detection — item/run-level risk with shared demand analysis |
 
@@ -31,9 +31,10 @@ removed from the pipeline — they were not actively used.
 - All upstream source tables already present in the target database:
   - `dbo.ETB_PAB_MO`, `dbo.ETB_ActiveDemand_Union_FG_MO`
   - `dbo.Prosenthal_Vendor_Items`, `dbo.PK010033`, `dbo.WO010032`, `dbo.IV00101`
-  - `dbo.Prosenthal_INV_BIN_QTY_wQTYTYPE`, `dbo.IV10300`
+  - `dbo.Prosenthal_INV_BIN_QTY_wQTYTYPE`
   - `dbo.ReceivingsLineItems`, `dbo.POP30330`, `dbo.PHR_MO_CostCalc1`, `dbo.ETB_SS`
   - `dbo.IV00300`
+  - **Note:** `dbo.IV10300` (cycle count table) is **not required** — View 4 CycleCount CTE is stubbed with `WHERE 1=0`. Cycle count columns output as NULL/NEVER_COUNTED.
 
 ---
 

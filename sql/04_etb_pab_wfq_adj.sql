@@ -6,7 +6,8 @@
 -- Dependencies: dbo.ETB_PAB_MO, dbo.ETB_ActiveDemand_Union_FG_MO,
 --               dbo.Prosenthal_Vendor_Items, dbo.PK010033, dbo.WO010032,
 --               dbo.IV00101, dbo.Prosenthal_INV_BIN_QTY_wQTYTYPE,
---               dbo.IV10300, dbo.ETB_WFQ_PIPE (View 3)
+--               dbo.ETB_WFQ_PIPE (View 3)
+--               NOTE: dbo.IV10300 not present in target environment — CycleCount CTE stubbed
 -- ============================================================================
 /*
 ================================================================================
@@ -378,14 +379,16 @@ InventoryAgg AS
 
 -- ============================================================================
 -- CycleCount: Last cycle count per item (Issue 3)
+-- Session 5 fix: dbo.IV10300 does not exist in target environment.
+-- Stubbed with WHERE 1=0 to return zero rows; output columns preserved as NULL
+-- for schema compatibility with downstream views (View 5).
 -- ============================================================================
 CycleCount AS
 (
     SELECT
-            RTRIM(LTRIM(cc.ITEMNMBR))                           AS ITEMNMBR,
-            MAX(CAST(cc.CYCLDATE AS date))                      AS Last_Cycle_Count_Date
-    FROM    dbo.IV10300 cc WITH (NOLOCK)
-    GROUP BY RTRIM(LTRIM(cc.ITEMNMBR))
+            CAST(NULL AS varchar(31))                           AS ITEMNMBR,
+            CAST(NULL AS date)                                  AS Last_Cycle_Count_Date
+    WHERE   1 = 0
 ),
 
 -- ============================================================================
