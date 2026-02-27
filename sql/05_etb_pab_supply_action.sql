@@ -1,3 +1,13 @@
+-- ============================================================================
+-- VIEW: ETB_PAB_SUPPLY_ACTION
+-- Purpose: Supply action recommendations and PO timing analysis
+-- Author: Zo Computer
+-- Date: 2026-02-26
+-- Dependencies: dbo.ETB_PAB_MO, dbo.ETB_ActiveDemand_Union_FG_MO,
+--               dbo.Prosenthal_Vendor_Items, dbo.PK010033, dbo.WO010032,
+--               dbo.IV00101, dbo.Prosenthal_INV_BIN_QTY_wQTYTYPE,
+--               dbo.IV10300, dbo.ETB_WFQ_PIPE (View 3)
+-- ============================================================================
 /*
 ================================================================================
 ETB_PAB_SUPPLY_ACTION — Supply Action Recommendations and PO Timing (View 5)
@@ -38,9 +48,10 @@ Data Quality Flags (Data_Quality_Flag):
   NON_WC_SITE             — WCID_From_MO doesn't follow WC-W% pattern
 
 Change Log:
-  2026-02-26: Full hardening — Config thresholds, TRY_CAST, UNASSIGNED vendor,
-              WC site validation, data quality flags, cycle counts, NOLOCK
-              consistency, documentation. (Issues 2–10)
+  2026-02-26: Full hardening — Config thresholds (added Urgent_PO_Days,
+              Warning_PO_Days, WFQ_Priority_Window_Days), TRY_CAST, UNASSIGNED
+              vendor, WC site validation, data quality flags, cycle counts,
+              NOLOCK consistency, documentation. (Issues 2–10)
 ================================================================================
 */
 
@@ -52,11 +63,14 @@ WITH
 Config AS
 (
     SELECT
-        7   AS Stale_Suppression_Days,    -- Stale suppression: days past due
-        7   AS Fence_Suppression_Days,    -- Fence suppression: forward window
-        45  AS WC_Inventory_Age_Days,     -- WC bin inventory age cutoff
-        90  AS Cycle_Count_Overdue_Days,  -- Cycle count overdue threshold
-        7   AS Early_Issue_Flag_Days      -- Early issue detection threshold
+        7   AS Stale_Suppression_Days,         -- Stale suppression: days past due
+        7   AS Fence_Suppression_Days,          -- Fence suppression: forward window
+        45  AS WC_Inventory_Age_Days,           -- WC bin inventory age cutoff
+        90  AS Cycle_Count_Overdue_Days,        -- Cycle count overdue threshold
+        7   AS Early_Issue_Flag_Days,           -- Early issue detection threshold
+        5   AS Urgent_PO_Days,                  -- Days to stockout for urgent status
+        10  AS Warning_PO_Days,                 -- Days to stockout for warning status
+        3   AS WFQ_Priority_Window_Days         -- Days for WFQ priority allocation
 ),
 
 -- ============================================================================
@@ -151,10 +165,11 @@ joined AS
             p_norm.VendorItem,
 
             -- Issue 4: UNASSIGNED fallback + source tracking
-            COALESCE(p_norm.PRIME_VNDR, 'UNASSIGNED')           AS PRIME_VNDR,
+            COALESCE(NULLIF(p_norm.PRIME_VNDR, ''), 'UNASSIGNED')  AS PRIME_VNDR,
             CASE
-                WHEN p_norm.PRIME_VNDR IS NOT NULL THEN 'PAB_MO'
-                ELSE                                    'UNASSIGNED'
+                WHEN p_norm.PRIME_VNDR IS NOT NULL
+                 AND LTRIM(RTRIM(p_norm.PRIME_VNDR)) <> '' THEN 'PAB_MO'
+                ELSE                                             'UNASSIGNED'
             END                                                 AS Vendor_Data_Source,
 
             p_norm.PURCHASING_LT,
@@ -506,7 +521,6 @@ ETB_WC_INV AS
 
 -- ============================================================================
 -- Demand_Ledger / DemandRowsOnly / Demand_Seq / Stockout_Detection
--- (See View 4 for pattern documentation — same logic repeated here)
 -- ============================================================================
 Demand_Ledger AS
 (
@@ -702,9 +716,6 @@ Balance_Analysis AS
 
 -- ============================================================================
 -- WFQ_Turnaround_Analysis: PO turnaround days per item from WFQ pipe
--- ============================================================================
--- Only future-dated estimated release dates contribute a meaningful turnaround.
--- Past-dated lots are already overdue and should not influence PO_On_Time logic.
 -- ============================================================================
 WFQ_Turnaround_Analysis AS
 (

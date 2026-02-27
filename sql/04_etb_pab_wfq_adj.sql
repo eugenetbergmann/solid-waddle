@@ -1,12 +1,22 @@
+-- ============================================================================
+-- VIEW: ETB_PAB_WFQ_ADJ
+-- Purpose: WFQ-adjusted balances with extended demand logic
+-- Author: Zo Computer
+-- Date: 2026-02-26
+-- Dependencies: dbo.ETB_PAB_MO, dbo.ETB_ActiveDemand_Union_FG_MO,
+--               dbo.Prosenthal_Vendor_Items, dbo.PK010033, dbo.WO010032,
+--               dbo.IV00101, dbo.Prosenthal_INV_BIN_QTY_wQTYTYPE,
+--               dbo.IV10300, dbo.ETB_WFQ_PIPE (View 3)
+-- ============================================================================
 /*
 ================================================================================
 ETB_PAB_WFQ_ADJ — WFQ-Adjusted Balances with Extended Demand Logic (View 4)
 ================================================================================
 Purpose:
-  Extends View 2 (ETB_WC_INV_UNIFIED) by integrating WFQ supply from View 3
-  (ETB_WFQ_PIPE) to compute an extended balance that reflects upcoming WFQ
-  arrivals.  Identifies stockout positions, the first stockout sequence, and
-  classifies each demand row's WFQ dependency status.
+  Extends View 2 (ETB_WC_INV_UNIFIED / analysis-views) by integrating WFQ
+  supply from View 3 (ETB_WFQ_PIPE) to compute an extended balance that reflects
+  upcoming WFQ arrivals.  Identifies stockout positions, the first stockout
+  sequence, and classifies each demand row's WFQ dependency status.
 
   This view is the basis for supply-action recommendations in View 5.
 
@@ -34,22 +44,14 @@ CTE Pipeline:
 
 Issue 1 Fix — Running Balance Doubling:
   Root cause: WFQ_Supply aggregated including SITE caused multiple rows per
-  item when the same item existed in both WF-Q and UNDERINV.  When joined to
-  WFQ_Allocated (which sums across all matching WFQ rows), each unique SITE
-  contributed its WFQ_Qty independently, multiplying the influx.
+  item when the same item existed in both WF-Q and UNDERINV.
 
   Fix applied:
-    1. WFQ_Supply aggregates by (ITEMNMBR, Estimated_Release_Date) only —
-       SITE is dropped because downstream demand does not care which WC SITE
-       the WFQ lot comes from; total available supply is what matters.
-    2. WFQ_Allocated joins on (ITEMNMBR) only, and the SUM condition uses
-       Estimated_Release_Date <= DUEDATE to ensure only lots that will arrive
-       on or before the demand date are counted.
-    3. The GROUP BY in WFQ_Allocated is (ITEMNMBR, Demand_Seq, DUEDATE,
-       Adjusted_Running_Balance, Stockout_Seq) — each demand row produces
-       exactly one aggregate influx value.  No row multiplication.
-    4. Extended_Demand joins back to WFQ_Allocated on (ITEMNMBR, Demand_Seq)
-       — a 1:1 join guarantee because WFQ_Allocated already aggregated.
+    1. WFQ_Supply aggregates by (ITEMNMBR, Estimated_Release_Date) only.
+    2. WFQ_Allocated joins on (ITEMNMBR) only, filtering by release date in CASE.
+    3. GROUP BY in WFQ_Allocated is (ITEMNMBR, Demand_Seq, DUEDATE,
+       Adjusted_Running_Balance, Stockout_Seq) — one row per demand row.
+    4. Extended_Demand joins on (ITEMNMBR, Demand_Seq) — 1:1 join guarantee.
 
 WFQ_Extended_Status Values:
   LEDGER_ONLY      — No WFQ supply available for this demand row
@@ -174,10 +176,11 @@ joined AS
             p_norm.VendorItem,
 
             -- Issue 4: UNASSIGNED fallback + source tracking
-            COALESCE(p_norm.PRIME_VNDR, 'UNASSIGNED')           AS PRIME_VNDR,
+            COALESCE(NULLIF(p_norm.PRIME_VNDR, ''), 'UNASSIGNED')  AS PRIME_VNDR,
             CASE
-                WHEN p_norm.PRIME_VNDR IS NOT NULL THEN 'PAB_MO'
-                ELSE                                    'UNASSIGNED'
+                WHEN p_norm.PRIME_VNDR IS NOT NULL
+                 AND LTRIM(RTRIM(p_norm.PRIME_VNDR)) <> '' THEN 'PAB_MO'
+                ELSE                                             'UNASSIGNED'
             END                                                 AS Vendor_Data_Source,
 
             p_norm.PURCHASING_LT,
@@ -608,7 +611,6 @@ Demand_Ledger AS
 -- DemandRowsOnly: Filter to rows with actionable demand
 -- ============================================================================
 -- Excludes BegBal rows, rows with no due date, and rows with zero required qty.
--- This population is what WFQ supply is matched against.
 -- ============================================================================
 DemandRowsOnly AS
 (
@@ -621,9 +623,6 @@ DemandRowsOnly AS
 
 -- ============================================================================
 -- Demand_Seq: Assign sequential demand position per item (for WFQ matching)
--- ============================================================================
--- Ordered by DUEDATE, ORDERNUMBER, Unified_Value for determinism.
--- Demand_Seq is the join key used in WFQ_Allocated below.
 -- ============================================================================
 Demand_Seq AS
 (
@@ -639,9 +638,6 @@ Demand_Seq AS
 -- ============================================================================
 -- Stockout_Detection: First demand sequence where balance goes negative
 -- ============================================================================
--- Stockout_Seq is the earliest Demand_Seq where Adjusted_Running_Balance <= 0.
--- WFQ supply is only allocated to rows at or after this sequence (deficit rows).
--- ============================================================================
 Stockout_Detection AS
 (
     SELECT
@@ -656,10 +652,7 @@ Stockout_Detection AS
 -- WFQ_Supply: Aggregate WFQ lot supply per item per estimated release date
 -- ============================================================================
 -- Issue 1 FIX: GROUP BY uses (ITEMNMBR, Estimated_Release_Date) only.
--- SITE is intentionally excluded to consolidate supply across WF-Q and UNDERINV.
--- Including SITE previously caused one WFQ_Supply row per SITE per date, which
--- when SUM'd in WFQ_Allocated produced double-counting if the same item had
--- lots in both locations on the same date.
+-- SITE excluded to consolidate supply across WF-Q and UNDERINV.
 -- ============================================================================
 WFQ_Supply AS
 (
@@ -672,22 +665,11 @@ WFQ_Supply AS
       AND   QTY_ON_HAND > 0
     GROUP BY
             ITEM_Number,
-            Estimated_Release_Date       -- Issue 1: SITE excluded (see note above)
+            Estimated_Release_Date
 ),
 
 -- ============================================================================
--- WFQ_Allocated: Per-demand-row WFQ influx calculation
--- ============================================================================
--- Issue 1 FIX: Joins demand to WFQ_Supply on ITEMNMBR only, then uses
--- a conditional SUM to accumulate only WFQ lots whose Estimated_Release_Date
--- is <= the demand row's DUEDATE (lots that will arrive in time to help).
---
--- The GROUP BY (ITEMNMBR, Demand_Seq, DUEDATE, Adjusted_Running_Balance,
--- Stockout_Seq) guarantees exactly ONE output row per demand row.
--- This is the 1:1 guarantee that prevents row multiplication in Extended_Demand.
---
--- Influx is only allocated to rows that are AT OR AFTER the first stockout
--- (Demand_Seq >= Stockout_Seq). Rows before the first deficit do not need WFQ.
+-- WFQ_Allocated: Per-demand-row WFQ influx calculation (Issue 1 FIX: 1:1 guarantee)
 -- ============================================================================
 WFQ_Allocated AS
 (
@@ -710,8 +692,6 @@ WFQ_Allocated AS
             )                                                   AS Ledger_WFQ_Influx
 
     FROM    Stockout_Detection d
-    -- Issue 1: join on ITEMNMBR only — cross to all lots for this item,
-    -- then filter by release date inside the CASE expression above.
     LEFT  JOIN WFQ_Supply w ON d.ITEMNMBR = w.ITEMNMBR
     GROUP BY
             d.ITEMNMBR,
@@ -723,9 +703,6 @@ WFQ_Allocated AS
 
 -- ============================================================================
 -- Extended_Demand: Demand rows enriched with WFQ influx and extended balance
--- ============================================================================
--- Issue 1 FIX: Joins on (ITEMNMBR, Demand_Seq) — a 1:1 join because
--- WFQ_Allocated already produced one row per demand row via GROUP BY.
 -- ============================================================================
 Extended_Demand AS
 (
@@ -750,17 +727,12 @@ Extended_Demand AS
 
     FROM    Stockout_Detection d
     LEFT  JOIN WFQ_Allocated w
-           ON  d.ITEMNMBR  = w.ITEMNMBR    -- Issue 1: 1:1 join via Demand_Seq
+           ON  d.ITEMNMBR  = w.ITEMNMBR
            AND d.Demand_Seq = w.Demand_Seq
 ),
 
 -- ============================================================================
 -- Final_Ledger: Merge Extended_Demand back onto full Demand_Ledger
--- ============================================================================
--- Non-demand rows (BegBal, supply rows) get Ledger_WFQ_Influx = 0 and
--- WFQ_Extended_Status = 'NON_DEMAND_LEDGER_ROW' or 'BEGINNING BALANCE'.
--- Join key: (ITEMNMBR, DUEDATE, ORDERNUMBER, Unified_Value) — must be unique
--- per row in Demand_Ledger for a true 1:1 match.
 -- ============================================================================
 Final_Ledger AS
 (
