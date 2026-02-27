@@ -7,6 +7,7 @@
 --               dbo.Prosenthal_Vendor_Items, dbo.PK010033, dbo.WO010032,
 --               dbo.IV00101, dbo.Prosenthal_INV_BIN_QTY_wQTYTYPE,
 --               dbo.ETB_WFQ_PIPE (View 3)
+--               NOTE: dbo.IV10300 not present in target environment — CycleCount CTE stubbed
 -- ============================================================================
 /*
 ================================================================================
@@ -378,10 +379,9 @@ InventoryAgg AS
 
 -- ============================================================================
 -- CycleCount: Last cycle count per item (Issue 3)
--- NOTE: dbo.IV10300 does not exist in this environment (no cycle count data).
---       Stub returns zero rows with typed NULLs to preserve output schema.
---       Downstream columns (Last_Cycle_Count_Date, Days_Since_Last_Cycle_Count,
---       Cycle_Count_Status) will output as NULL / NEVER_COUNTED.
+-- Session 5 fix: dbo.IV10300 does not exist in target environment.
+-- Stubbed with WHERE 1=0 to return zero rows; output columns preserved as NULL
+-- for schema compatibility with downstream views (View 5).
 -- ============================================================================
 CycleCount AS
 (

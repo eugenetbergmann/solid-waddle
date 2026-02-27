@@ -34,13 +34,7 @@ removed from the pipeline — they were not actively used.
   - `dbo.Prosenthal_INV_BIN_QTY_wQTYTYPE`
   - `dbo.ReceivingsLineItems`, `dbo.POP30330`, `dbo.PHR_MO_CostCalc1`, `dbo.ETB_SS`
   - `dbo.IV00300`
-- **Environment note (Session 5):** `dbo.IV10300` (cycle count table) is **not present** in the
-  target environment. The CycleCount CTE in View 4 is stubbed with `WHERE 1 = 0`. Do not
-  reference `dbo.IV10300` in any view deployed to this environment.
-- **Deployment pattern:** All SQL files are plain `WITH/SELECT` statements for manual execution
-  in SSMS. Do **not** add `CREATE OR ALTER VIEW` headers — they cause parse errors when files
-  are opened directly in SSMS. Do **not** author or paste SQL through rich-text systems
-  (Word, web forms) — they corrupt apostrophes to Unicode smart quotes which SQL Server rejects.
+  - **Note:** `dbo.IV10300` (cycle count table) is **not required** — View 4 CycleCount CTE is stubbed with `WHERE 1=0`. Cycle count columns output as NULL/NEVER_COUNTED.
 
 ---
 
