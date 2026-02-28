@@ -61,7 +61,7 @@ else
     warn "SCOPE.md not found — create before committing"
 fi
 
-# CP-3: Dependency chain — all 6 sql/ views present
+# CP-3: Dependency chain — all 7 sql/ views present
 echo ""
 echo "[CP-3] SQL view files present (sql/ — single source of truth)"
 for f in sql/01_etb_pab_auto.sql \
@@ -69,7 +69,8 @@ for f in sql/01_etb_pab_auto.sql \
           sql/03_etb_wfq_pipe.sql \
           sql/04_etb_pab_wfq_adj.sql \
           sql/05_etb_pab_supply_action.sql \
-          sql/08_etb_v_client_295_stockouts.sql; do
+          sql/08_etb_v_client_295_stockouts.sql \
+          sql/09_etb_ralph_loop_37d.sql; do
     if [ -f "$f" ]; then
         pass "$f"
     else
@@ -77,10 +78,10 @@ for f in sql/01_etb_pab_auto.sql \
     fi
 done
 
-# CP-4: sql/ is the canonical source — all 6 views present and non-empty
+# CP-4: sql/ is the canonical source — all 7 views present and non-empty
 echo ""
-echo "[CP-4] sql/ canonical source integrity (all 6 views present and non-empty)"
-for n in 01 02 03 04 05 08; do
+echo "[CP-4] sql/ canonical source integrity (all 7 views present and non-empty)"
+for n in 01 02 03 04 05 08 09; do
     sql_file=$(ls sql/${n}_*.sql 2>/dev/null | head -1)
     if [ -z "$sql_file" ]; then
         fail "sql/${n}_*.sql not found"
@@ -212,6 +213,18 @@ if grep -q "ETB_PAB_SUPPLY_ACTION" sql/08_etb_v_client_295_stockouts.sql; then
     pass "View 8 references ETB_PAB_SUPPLY_ACTION"
 else
     fail "View 8 does NOT reference ETB_PAB_SUPPLY_ACTION"
+fi
+# View 9 should reference ETB_PAB_SUPPLY_ACTION
+if grep -q "ETB_PAB_SUPPLY_ACTION" sql/09_etb_ralph_loop_37d.sql; then
+    pass "View 9 references ETB_PAB_SUPPLY_ACTION"
+else
+    fail "View 9 does NOT reference ETB_PAB_SUPPLY_ACTION"
+fi
+# View 9 should reference CustomerMap
+if grep -q "CustomerMap" sql/09_etb_ralph_loop_37d.sql; then
+    pass "View 9 references CustomerMap"
+else
+    fail "View 9 does NOT reference CustomerMap"
 fi
 
 # =============================================================================

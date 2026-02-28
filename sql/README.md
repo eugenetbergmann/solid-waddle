@@ -37,6 +37,14 @@ REVIEW_REQUIRED) and `Additional_Order_Qty` per demand row. Primary output for b
 Client 295 stockout monitor. Item/run-level risk with shared demand analysis across
 all customers. References Views 4 and 5.
 
+### 09 — ETB_RALPH_LOOP_37D (`09_etb_ralph_loop_37d.sql`)
+Ralph Loop 37-Day Horizon Universal View. Single Excel-ready flat table (one row per
+item) covering all demand within the next 37 calendar days. Integrates item-level
+stockout flag + first deficit date, client-level stockout flag, program presence flags
+(Is291 / Is295 / Is298), and ETB supply coverage columns (ETB_PO_Status,
+ETB_WFQ_Status, ETB_Deficit_37D). Ordered by stockout severity for direct manager
+export. References View 5 (ETB_PAB_SUPPLY_ACTION) and dbo.CustomerMap.
+
 ---
 
 ## Deployment Notes
