@@ -302,8 +302,7 @@ PAB_Final AS
     LEFT  JOIN ledger_ranked ml
            ON  Core.CleanOrder   = ml.CleanMO
            AND Core.CleanItem    = ml.ITEMNMBR
-           AND (  (Core.CleanDeductions = ml.Required_Qty AND ml.rn_qty = 1)
-               OR  ml.rn_any = 1)
+           AND ml.rn_any = 1  -- Single deterministic match per MO+Item (fixes 3x row duplication bug)
 ),
 
 -- ============================================================================
