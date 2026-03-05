@@ -1,12 +1,12 @@
 -- ============================================================================
 -- VIEW: ETB_STOCKOUTS
 -- Purpose: 180-day forward stockout summary per item
---          Aggregates active, clean-data demand rows from ETB_PAB_SUPPLY_ACTION
+--          Aggregates active, clean-data demand rows from ETB_SUPPLY_ACTION
 --          Includes program flags (291/295/298/301/303), max deficit, PO totals,
 --          WFQ rescues, and supply action counts (ORDER/BOTH/urgent)
 -- Report type: 'RALPH_LOOP_180D_STOCKOUTS'
 -- Integrated: March 2026 — KILO loop (replaces prior client-specific stockout views)
--- Consumes: dbo.ETB_PAB_SUPPLY_ACTION (View 5 — fixed upstream)
+-- Consumes: dbo.ETB_SUPPLY_ACTION (View 5 — fixed upstream)
 -- ============================================================================
 
 WITH Windowed AS (
@@ -25,7 +25,7 @@ WITH Windowed AS (
         s.Net_Demand,
         s.Data_Quality_Flag,
         s.Supply_Action_Recommendation
-    FROM dbo.ETB_PAB_SUPPLY_ACTION s WITH (NOLOCK)
+    FROM dbo.ETB_SUPPLY_ACTION s WITH (NOLOCK)
     WHERE s.Demand_Due_Date >= CAST(GETDATE() AS date)
       AND s.Demand_Due_Date < DATEADD(DAY, 181, CAST(GETDATE() AS date))
       AND ISNULL(s.Net_Demand, 0) > 0

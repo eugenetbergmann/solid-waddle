@@ -63,7 +63,7 @@ WITH Demand_Base AS (
         s.Data_Quality_Flag,
         s.Suppression_Status,
         s.WFQ_Extended_Status
-    FROM dbo.ETB_PAB_SUPPLY_ACTION s WITH (NOLOCK)
+    FROM dbo.ETB_SUPPLY_ACTION s WITH (NOLOCK)
     WHERE s.Demand_Due_Date >= CAST(GETDATE() AS DATE)
       AND ISNULL(s.Net_Demand, 0) > 0
       AND s.Suppression_Status NOT IN (
