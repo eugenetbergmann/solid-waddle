@@ -1,16 +1,15 @@
 -- ============================================================================
 -- VIEW: ETB_STOCKOUTS
 -- Purpose: 180-day forward stockout summary per item
---          Aggregates active, clean-data demand rows from ETB_SUPPLY_ACTION
---          Includes program flags (291/295/298/301/303), max deficit, PO totals,
---          WFQ rescues, and supply action counts (ORDER/BOTH/urgent)
+-- Aggregates active, clean-data demand rows from ETB_SUPPLY_ACTION
+-- Includes minimal client/program flags (just the number), max deficit, 
+-- PO totals, WFQ rescues, and supply action urgency counters
 -- Report type: 'RALPH_LOOP_180D_STOCKOUTS'
--- Integrated: March 2026 — KILO loop (replaces prior client-specific stockout views)
--- Consumes: dbo.ETB_SUPPLY_ACTION (View 5 — fixed upstream)
+-- Integrated: March 2026 — KILO loop
+-- Consumes: dbo.ETB_SUPPLY_ACTION (View 5)
 -- ============================================================================
-
 WITH Windowed AS (
-    SELECT 
+    SELECT
         s.ITEMNMBR,
         s.ItemDescription,
         s.UOM,
@@ -36,7 +35,7 @@ WITH Windowed AS (
       )
       AND s.Data_Quality_Flag = 'CLEAN'
 )
-SELECT 
+SELECT
     w.ITEMNMBR                          AS Item_Number,
     MAX(w.ItemDescription)              AS Description,
     MAX(w.UOM)                          AS Unit_Of_Measure,
@@ -44,19 +43,25 @@ SELECT
     MIN(w.Adjusted_Running_Balance)     AS Min_Projected_Stockout,
     MIN(w.Demand_Due_Date)              AS First_Deficit_Date,
     1                                   AS Item_Stockout_Flag,
-    MAX(CASE WHEN TRY_CAST(w.Construct AS int) = 291 THEN 1 ELSE 0 END) AS Program_291_Flag,
-    MAX(CASE WHEN TRY_CAST(w.Construct AS int) = 295 THEN 1 ELSE 0 END) AS Program_295_Flag,
-    MAX(CASE WHEN TRY_CAST(w.Construct AS int) = 298 THEN 1 ELSE 0 END) AS Program_298_Flag,
-    MAX(CASE WHEN TRY_CAST(w.Construct AS int) = 301 THEN 1 ELSE 0 END) AS Program_301_Flag,
-    MAX(CASE WHEN TRY_CAST(w.Construct AS int) = 303 THEN 1 ELSE 0 END) AS Program_303_Flag,
+
+    -- Minimal client/program flags (just the number)
+    MAX(CASE WHEN TRY_CAST(w.Construct AS int) = 291 THEN 1 ELSE 0 END) AS [291],
+    MAX(CASE WHEN TRY_CAST(w.Construct AS int) = 295 THEN 1 ELSE 0 END) AS [295],
+    MAX(CASE WHEN TRY_CAST(w.Construct AS int) = 298 THEN 1 ELSE 0 END) AS [298],
+    MAX(CASE WHEN TRY_CAST(w.Construct AS int) = 301 THEN 1 ELSE 0 END) AS [301],
+    MAX(CASE WHEN TRY_CAST(w.Construct AS int) = 303 THEN 1 ELSE 0 END) AS [303],
+
     MAX(ISNULL(w.Deficit_Qty, 0))       AS Max_Deficit_180D,
     SUM(ISNULL(w.POs_On_Order_Qty, 0))  AS Total_PO_Qty_On_Order,
     SUM(CASE WHEN w.WFQ_Extended_Status = 'WFQ_RESCUED' THEN 1 ELSE 0 END) AS WFQ_Rescue_Count,
-    SUM(CASE WHEN w.Supply_Action_Recommendation = 'ORDER' THEN 1 ELSE 0 END) AS COUNT_ORDER,
-    SUM(CASE WHEN w.Supply_Action_Recommendation = 'BOTH'  THEN 1 ELSE 0 END) AS COUNT_BOTH,
+
+    -- Supply action urgency counters
+    SUM(CASE WHEN w.Supply_Action_Recommendation = 'ORDER' THEN 1 ELSE 0 END) AS Count_Order,
+    SUM(CASE WHEN w.Supply_Action_Recommendation = 'BOTH'  THEN 1 ELSE 0 END) AS Count_Both,
     SUM(CASE WHEN w.Supply_Action_Recommendation IN ('ORDER', 'BOTH')
              AND w.Demand_Due_Date <= DATEADD(DAY, 10, CAST(GETDATE() AS date))
-             THEN 1 ELSE 0 END) AS URGENT_COUNT,
+             THEN 1 ELSE 0 END) AS Urgent_Count,
+
     CAST(GETDATE() AS date)             AS Analysis_Date,
     'RALPH_LOOP_180D_STOCKOUTS'         AS Report_Type
 FROM Windowed w
