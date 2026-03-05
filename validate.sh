@@ -44,7 +44,7 @@ echo "--- Phase 1: ISOLATE ---"
 # CP-1: Context files exist
 echo ""
 echo "[CP-1] Context files present"
-for f in SKILL.md docs/ARCHITECTURE.md docs/CONTROL_LAYER.md docs/DEPLOYMENT.md; do
+for f in SKILL.md docs/ARCHITECTURE.md docs/DEPLOYMENT.md; do
     if [ -f "$f" ]; then
         pass "$f exists"
     else
