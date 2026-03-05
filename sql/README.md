@@ -24,7 +24,7 @@ WFQ overlay. Stockout detection, extended balance calculation, WFQ dependency st
 per demand row. Basis for supply-action recommendations in View 5.
 
 **Session 5 fix (2026-02-27):** Unicode smart quotes purged; CycleCount CTE stubbed
-(`WHERE 1=0`) due to absence of `dbo.IV10300` in target environment; `CREATE OR ALTER VIEW`
+(`WHERE 1=0`) due to absence of `dbo.IV10300` in target environment; `CREATE VIEW`
 header removed for manual SSMS deployment pattern. Cycle count output columns
 (`Last_Cycle_Count_Date`, `Days_Since_Last_Cycle_Count`, `Cycle_Count_Status`) preserved
 in schema as NULL / NEVER_COUNTED for downstream compatibility.
@@ -56,7 +56,7 @@ Governance precondition: weight changes require PO approval.
 
 - **Deployment pattern:** Manual SSMS execution (paste-and-run). Files 01–07 are plain
   `WITH ... SELECT` statements. File 11 (`11_weighted_universe.sql`) uses
-  `CREATE TABLE` and `CREATE OR ALTER VIEW` — execute in a single SSMS pass.
+  `CREATE TABLE` and `CREATE VIEW` — execute in a single SSMS pass.
 - **Encoding:** All files must be plain ASCII / UTF-8 without BOM. Never author SQL
   through rich-text editors (Word, web forms) — they corrupt apostrophes to smart quotes
   (U+2018/U+2019) which SQL Server cannot parse.

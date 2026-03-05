@@ -9,7 +9,7 @@
 -- Consumes: dbo.ETB_PAB_SUPPLY_ACTION (View 5 — fixed upstream)
 -- ============================================================================
 
-CREATE OR ALTER VIEW dbo.ETB_STOCKOUTS
+CREATE VIEW dbo.ETB_STOCKOUTS
 AS
 WITH Windowed AS (
     SELECT 
