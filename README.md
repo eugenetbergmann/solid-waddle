@@ -7,13 +7,16 @@ A complete, production-ready SQL Server view pipeline that transforms raw manufa
 ## Repository Structure
 
 ```
-sql/                                     ← SINGLE SOURCE OF TRUTH (all 6 views)
+sql/                                     ← SINGLE SOURCE OF TRUTH (all 9 sql files)
   01_etb_pab_auto.sql                    # View 1 — PAB ledger foundation
   02_etb_ss_calc.sql                     # View 2 — Safety stock calculation
   03_etb_wfq_pipe.sql                    # View 3 — WFQ pipeline source data
   04_etb_pab_wfq_adj.sql                 # View 4 — WFQ overlay + extended balance
-  05_etb_pab_supply_action.sql           # View 5 — Supply action decision surface
+  05_etb_supply_action.sql               # View 5 — Supply action decision surface
   08_etb_v_client_295_stockouts.sql      # View 8 — Client 295 stockout detection
+  09_etb_ralph_loop_37d.sql              # View 9 — 37-day horizon flat table
+  10_etb_stockouts.sql                   # View 10 — 180-day stockout aggregation
+  11_weighted_universe.sql               # View 11 — Weighted Universe (table + 3 views)
 
 docs/
   ARCHITECTURE.md                        # View hierarchy & dependency diagram
@@ -32,6 +35,7 @@ validate.sh                              # Pre-commit validation (14 checkpoints
 **Note**: Views 6 (`ETB_RUN_RISK`) and 7 (`ETB_BUYER_CONTROL`) have been **removed** —
 they were not actively used. `pipeline-views/` and `analysis-views/` directories have
 been consolidated into `sql/` (Session 5 — 2026-02-27).
+View 5 file was renamed from `05_etb_pab_supply_action.sql` to `05_etb_supply_action.sql` (March 2026).
 
 ---
 
@@ -71,17 +75,23 @@ been consolidated into `sql/` (Session 5 — 2026-02-27).
                     └──────────────┬───────────────┘
                                    │
                                    ▼
-                    ┌─────────────────────────────┐
-                    │  View 5: ETB_PAB_SUPPLY_     │
-                    │  ACTION — Decision Surface    │
-                    └──────────────┬───────────────┘
-                                   │
-                                   ▼
-                    ┌─────────────────────────────┐
-                    │  View 8: ETB_V_CLIENT_295_   │
-                    │  STOCKOUTS                    │
-                    │  Client 295 Stockout Monitor  │
-                    └─────────────────────────────┘
+                     ┌─────────────────────────────┐
+                     │  View 5: ETB_PAB_SUPPLY_     │
+                     │  ACTION — Decision Surface    │
+                     └──────┬──────────┬────────────┘
+                            │          │          │
+                            ▼          ▼          ▼
+             ┌─────────────────┐  ┌──────────┐  ┌──────────────────────┐
+             │ View 8:         │  │ View 10: │  │ View 11:             │
+             │ ETB_V_CLIENT_   │  │ ETB_     │  │ ETB_PROGRAM_WEIGHTS  │
+             │ 295_STOCKOUTS   │  │ STOCKOUTS│  │ ETB_WEIGHTED_DEMAND  │
+             └─────────────────┘  └──────────┘  │ ETB_WEIGHTED_SUMMARY │
+                                                 └──────────────────────┘
+             ┌─────────────────┐
+             │ View 9:         │
+             │ ETB_RALPH_LOOP_ │
+             │ 37D             │
+             └─────────────────┘
 ```
 
 ---
@@ -94,8 +104,11 @@ been consolidated into `sql/` (Session 5 — 2026-02-27).
 | 2 | `ETB_SS_CALC` | `sql/02_etb_ss_calc.sql` | Safety stock: lead times, demand statistics, SS quantities | `ETB_SS`, `ReceivingsLineItems`, `POP30330`, `PHR_MO_CostCalc1` | Production |
 | 3 | `ETB_WFQ_PIPE` | `sql/03_etb_wfq_pipe.sql` | WFQ pipeline source: lot-level quarantine inventory with release estimates | `IV00300`, `IV00101` | Production |
 | 4 | `ETB_PAB_WFQ_ADJ` | `sql/04_etb_pab_wfq_adj.sql` | WFQ overlay: stockout detection, extended balance, WFQ status classification | Views 1–3 (re-inlined) + `Prosenthal_INV_BIN_QTY_wQTYTYPE`, `IV10300` | Production |
-| 5 | `ETB_PAB_SUPPLY_ACTION` | `sql/05_etb_pab_supply_action.sql` | Final decision surface: deficit analysis, PO timing, supply action recommendations | Views 1–4 (re-inlined) | Production |
+| 5 | `ETB_PAB_SUPPLY_ACTION` | `sql/05_etb_supply_action.sql` | Final decision surface: deficit analysis, PO timing, supply action recommendations | Views 1–4 (re-inlined) | Production |
 | 8 | `ETB_V_CLIENT_295_STOCKOUTS` | `sql/08_etb_v_client_295_stockouts.sql` | Client 295 stockout detection: item/run-level risk with shared demand analysis | View 5 + View 2 + View 4 | Production |
+| 9 | `ETB_RALPH_LOOP_37D` | `sql/09_etb_ralph_loop_37d.sql` | 37-day horizon universal item-level view: stockout flag, client flags, program flags, ETB supply coverage | View 5 + `CustomerMap` | Production |
+| 10 | `ETB_STOCKOUTS` | `sql/10_etb_stockouts.sql` | 180-day forward stockout aggregation: program flags (291/295/298/301/303), max deficit, action counts | View 5 | Production |
+| 11 | `ETB_PROGRAM_WEIGHTS` + `ETB_WEIGHTED_DEMAND` + `ETB_WEIGHTED_SUMMARY` | `sql/11_weighted_universe.sql` | Weighted Universe: credibility weights table, RAW vs WEIGHTED demand delta views | View 5 | Production |
 
 ---
 
@@ -195,6 +208,45 @@ Provides clear, actionable stockout signals scoped to Construct 295 while captur
 
 ---
 
+### View 10 — `ETB_STOCKOUTS` (180-Day Stockout Aggregation)
+
+Aggregates active, clean-data demand rows from `ETB_PAB_SUPPLY_ACTION` into a per-item stockout summary covering the next 180 days. Only rows with `Data_Quality_Flag = 'CLEAN'` and `MIN(Adjusted_Running_Balance) < 0` (HAVING clause) are returned.
+
+**Key outputs**:
+
+| Column | Description |
+|--------|-------------|
+| `Item_Number` | Item number |
+| `First_Deficit_Date` | Earliest demand due date with a deficit |
+| `Min_Projected_Stockout` | `MIN(Adjusted_Running_Balance)` — worst projected balance |
+| `Max_Deficit_180D` | `MAX(Deficit_Qty)` — worst single demand deficit |
+| `Program_291_Flag` … `Program_303_Flag` | 1 if item has demand from that construct |
+| `COUNT_ORDER` | Count of ORDER supply action rows |
+| `COUNT_BOTH` | Count of BOTH supply action rows |
+| `URGENT_COUNT` | ORDER/BOTH rows due within 10 days |
+| `WFQ_Rescue_Count` | Count of WFQ_RESCUED demand rows |
+| `Report_Type` | `'RALPH_LOOP_180D_STOCKOUTS'` |
+
+---
+
+### View 11 — `ETB_WEIGHTED_UNIVERSE` (Weighted Universe)
+
+Defines credibility weights per program/construct and applies them to raw demand from View 5. Consists of two tables and three views deployed together from `11_weighted_universe.sql`.
+
+**Objects created**:
+
+| Object | Type | Description |
+|--------|------|-------------|
+| `ETB_PROGRAM_WEIGHTS` | Table | Weights per Program_ID with effective/expiry dates, audit fields. Weight range 0.00–1.00 enforced by CHECK constraint. |
+| `ETB_PROGRAM_WEIGHTS_AUDIT` | Table | Change log for weight updates — old/new weight, reason, timestamp. |
+| `ETB_CURRENT_PROGRAM_WEIGHTS` | View | Active weights (Expiry_Date IS NULL or >= today). |
+| `ETB_WEIGHTED_DEMAND` | View | Per-row RAW vs WEIGHTED demand, delta, and `Weight_Reduction_Pct`. Defaults to weight 1.00 (no reduction) for programs without a weight row. |
+| `ETB_WEIGHTED_SUMMARY` | View | Per-item aggregation of RAW and WEIGHTED totals, weighted action counts. |
+
+**Governance note**: Weight values in `ETB_PROGRAM_WEIGHTS` require PO/business owner approval before change. This is a 🔵 open item — see PART ONE of the KILO context package.
+
+---
+
 ## Source Tables Referenced
 
 | Table | Used By | Purpose |
@@ -233,8 +285,11 @@ Execute in order — each view depends on its predecessors:
 | 2 | `sql/02_etb_ss_calc.sql` | `dbo.ETB_SS_CALC` |
 | 3 | `sql/03_etb_wfq_pipe.sql` | `dbo.ETB_WFQ_PIPE` |
 | 4 | `sql/04_etb_pab_wfq_adj.sql` | `dbo.ETB_PAB_WFQ_ADJ` |
-| 5 | `sql/05_etb_pab_supply_action.sql` | `dbo.ETB_PAB_SUPPLY_ACTION` |
+| 5 | `sql/05_etb_supply_action.sql` | `dbo.ETB_PAB_SUPPLY_ACTION` |
 | 6 | `sql/08_etb_v_client_295_stockouts.sql` | `dbo.ETB_V_CLIENT_295_STOCKOUTS` |
+| 7 | `sql/09_etb_ralph_loop_37d.sql` | `dbo.ETB_RALPH_LOOP_37D` |
+| 8 | `sql/10_etb_stockouts.sql` | `dbo.ETB_STOCKOUTS` |
+| 9 | `sql/11_weighted_universe.sql` | `dbo.ETB_PROGRAM_WEIGHTS` (table) + `dbo.ETB_PROGRAM_WEIGHTS_AUDIT` (table) + `dbo.ETB_CURRENT_PROGRAM_WEIGHTS` + `dbo.ETB_WEIGHTED_DEMAND` + `dbo.ETB_WEIGHTED_SUMMARY` |
 
 ### Validation
 
@@ -245,8 +300,14 @@ FROM sys.views
 WHERE name IN (
     'ETB_PAB_AUTO', 'ETB_SS_CALC', 'ETB_WFQ_PIPE',
     'ETB_PAB_WFQ_ADJ', 'ETB_PAB_SUPPLY_ACTION',
-    'ETB_V_CLIENT_295_STOCKOUTS'
+    'ETB_V_CLIENT_295_STOCKOUTS', 'ETB_RALPH_LOOP_37D',
+    'ETB_STOCKOUTS', 'ETB_CURRENT_PROGRAM_WEIGHTS',
+    'ETB_WEIGHTED_DEMAND', 'ETB_WEIGHTED_SUMMARY'
 );
+
+-- Verify Weighted Universe tables exist
+SELECT name, type_desc FROM sys.tables
+WHERE name IN ('ETB_PROGRAM_WEIGHTS', 'ETB_PROGRAM_WEIGHTS_AUDIT');
 
 -- Row count check
 SELECT 'ETB_PAB_SUPPLY_ACTION' AS View_Name, COUNT(*) AS Rows FROM dbo.ETB_PAB_SUPPLY_ACTION
@@ -261,6 +322,13 @@ FROM dbo.ETB_V_CLIENT_295_STOCKOUTS WHERE Primary_Vendor IS NULL;
 
 ```sql
 -- Drop in reverse order
+IF EXISTS (SELECT 1 FROM sys.views WHERE name = 'ETB_WEIGHTED_SUMMARY') DROP VIEW dbo.ETB_WEIGHTED_SUMMARY;
+IF EXISTS (SELECT 1 FROM sys.views WHERE name = 'ETB_WEIGHTED_DEMAND') DROP VIEW dbo.ETB_WEIGHTED_DEMAND;
+IF EXISTS (SELECT 1 FROM sys.views WHERE name = 'ETB_CURRENT_PROGRAM_WEIGHTS') DROP VIEW dbo.ETB_CURRENT_PROGRAM_WEIGHTS;
+IF EXISTS (SELECT 1 FROM sys.tables WHERE name = 'ETB_PROGRAM_WEIGHTS_AUDIT') DROP TABLE dbo.ETB_PROGRAM_WEIGHTS_AUDIT;
+IF EXISTS (SELECT 1 FROM sys.tables WHERE name = 'ETB_PROGRAM_WEIGHTS') DROP TABLE dbo.ETB_PROGRAM_WEIGHTS;
+IF EXISTS (SELECT 1 FROM sys.views WHERE name = 'ETB_STOCKOUTS') DROP VIEW dbo.ETB_STOCKOUTS;
+IF EXISTS (SELECT 1 FROM sys.views WHERE name = 'ETB_RALPH_LOOP_37D') DROP VIEW dbo.ETB_RALPH_LOOP_37D;
 IF EXISTS (SELECT 1 FROM sys.views WHERE name = 'ETB_V_CLIENT_295_STOCKOUTS') DROP VIEW dbo.ETB_V_CLIENT_295_STOCKOUTS;
 IF EXISTS (SELECT 1 FROM sys.views WHERE name = 'ETB_PAB_SUPPLY_ACTION') DROP VIEW dbo.ETB_PAB_SUPPLY_ACTION;
 IF EXISTS (SELECT 1 FROM sys.views WHERE name = 'ETB_PAB_WFQ_ADJ') DROP VIEW dbo.ETB_PAB_WFQ_ADJ;

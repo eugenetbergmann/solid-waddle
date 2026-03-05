@@ -12,12 +12,20 @@ but the underlying database views must still exist before View 8 can reference t
 | 2 | ETB_SS_CALC | `sql/02_etb_ss_calc.sql` | Safety stock reference — lead times, demand statistics, SS quantities |
 | 3 | ETB_WFQ_PIPE | `sql/03_etb_wfq_pipe.sql` | WFQ supply pipeline — lot-level quarantine inventory with release estimates |
 | 4 | ETB_PAB_WFQ_ADJ | `sql/04_etb_pab_wfq_adj.sql` | WFQ overlay — stockout detection, extended balance, WFQ status. Session 5: Smart quotes fixed, IV10300 stub (no cycle count data), CREATE VIEW removed. |
-| 5 | ETB_PAB_SUPPLY_ACTION | `sql/05_etb_pab_supply_action.sql` | Decision surface — SUFFICIENT/ORDER/BOTH/REVIEW_REQUIRED per demand row |
+| 5 | ETB_PAB_SUPPLY_ACTION | `sql/05_etb_supply_action.sql` | Decision surface — SUFFICIENT/ORDER/BOTH/REVIEW_REQUIRED per demand row |
 | 6 | ETB_V_CLIENT_295_STOCKOUTS | `sql/08_etb_v_client_295_stockouts.sql` | Client 295 stockout detection — item/run-level risk with shared demand analysis |
+| 7 | ETB_STOCKOUTS | `sql/10_etb_stockouts.sql` | 180-day forward stockout aggregation — program flags, max deficit, action counts |
+| 8 | ETB_PROGRAM_WEIGHTS + ETB_WEIGHTED_DEMAND + ETB_WEIGHTED_SUMMARY | `sql/11_weighted_universe.sql` | Weighted Universe — credibility weights table/views, RAW vs WEIGHTED demand deltas |
 
 **Dependency note**: View 8 consumes `dbo.ETB_PAB_SUPPLY_ACTION` (View 5),
 `dbo.ETB_SS_CALC` (View 2), and `dbo.ETB_PAB_WFQ_ADJ` (View 4).
+`ETB_STOCKOUTS` (step 7) and the Weighted Universe objects (step 8) both consume
+`dbo.ETB_PAB_SUPPLY_ACTION` (View 5).
 Always deploy in the order above.
+
+**Step 8 note**: `sql/11_weighted_universe.sql` creates a TABLE (`ETB_PROGRAM_WEIGHTS`),
+an audit TABLE (`ETB_PROGRAM_WEIGHTS_AUDIT`), and three views. Deploy via SSMS in
+a single execution pass. Weights are editable in `dbo.ETB_PROGRAM_WEIGHTS`.
 
 **Removed views**: Views 6 (`ETB_RUN_RISK`) and 7 (`ETB_BUYER_CONTROL`) have been
 removed from the pipeline — they were not actively used.
@@ -49,13 +57,16 @@ removed from the pipeline — they were not actively used.
 ### Automated Deployment (SQLCMD)
 
 ```bash
-# Deploy all 6 views in dependency order
+# Deploy all views in dependency order
 for f in sql/01_etb_pab_auto.sql \
           sql/02_etb_ss_calc.sql \
           sql/03_etb_wfq_pipe.sql \
           sql/04_etb_pab_wfq_adj.sql \
-          sql/05_etb_pab_supply_action.sql \
-          sql/08_etb_v_client_295_stockouts.sql; do
+          sql/05_etb_supply_action.sql \
+          sql/08_etb_v_client_295_stockouts.sql \
+          sql/09_etb_ralph_loop_37d.sql \
+          sql/10_etb_stockouts.sql \
+          sql/11_weighted_universe.sql; do
     echo "Deploying $f..."
     sqlcmd -S <server> -d <database> -i "$f"
 done
@@ -106,6 +117,27 @@ SELECT TOP 10
 FROM dbo.ETB_PAB_SUPPLY_ACTION;
 ```
 
+### View 10 — ETB_STOCKOUTS
+
+```sql
+SELECT * FROM sys.views WHERE name = 'ETB_STOCKOUTS';
+SELECT TOP 10
+    Item_Number, Description, First_Deficit_Date,
+    Min_Projected_Stockout, Max_Deficit_180D,
+    COUNT_ORDER, COUNT_BOTH, URGENT_COUNT
+FROM dbo.ETB_STOCKOUTS
+ORDER BY URGENT_COUNT DESC, Min_Projected_Stockout ASC;
+```
+
+### View 11 — Weighted Universe
+
+```sql
+SELECT * FROM sys.tables WHERE name = 'ETB_PROGRAM_WEIGHTS';
+SELECT * FROM sys.views WHERE name IN ('ETB_CURRENT_PROGRAM_WEIGHTS', 'ETB_WEIGHTED_DEMAND', 'ETB_WEIGHTED_SUMMARY');
+SELECT TOP 5 * FROM dbo.ETB_CURRENT_PROGRAM_WEIGHTS;
+SELECT TOP 5 ITEMNMBR, RAW_Net_Demand, Weighted_Net_Demand, Program_Weight FROM dbo.ETB_WEIGHTED_DEMAND;
+```
+
 ### View 8 — ETB_V_CLIENT_295_STOCKOUTS
 
 ```sql
@@ -120,12 +152,14 @@ FROM dbo.ETB_V_CLIENT_295_STOCKOUTS;
 
 ## Validation Checklist
 
-- [ ] All 6 views created successfully (`sys.views` check)
+- [ ] All views/tables created successfully (`sys.views` / `sys.tables` check)
 - [ ] No errors during execution
 - [ ] Views return expected columns
 - [ ] `Supply_Action_Recommendation` populated for all rows in View 5
 - [ ] No NULL values in `PRIME_VNDR` (should be `'UNASSIGNED'` as fallback)
 - [ ] `Is_Stockout` column populated in View 8
+- [ ] `ETB_STOCKOUTS` returns rows with `HAVING MIN < 0` filter active
+- [ ] `ETB_PROGRAM_WEIGHTS` table created; populate weights before querying `ETB_WEIGHTED_DEMAND`
 
 ---
 
@@ -133,6 +167,18 @@ FROM dbo.ETB_V_CLIENT_295_STOCKOUTS;
 
 ```sql
 -- Drop in reverse dependency order
+IF EXISTS (SELECT * FROM sys.views WHERE name = 'ETB_WEIGHTED_SUMMARY')     DROP VIEW dbo.ETB_WEIGHTED_SUMMARY;
+GO
+IF EXISTS (SELECT * FROM sys.views WHERE name = 'ETB_WEIGHTED_DEMAND')      DROP VIEW dbo.ETB_WEIGHTED_DEMAND;
+GO
+IF EXISTS (SELECT * FROM sys.views WHERE name = 'ETB_CURRENT_PROGRAM_WEIGHTS') DROP VIEW dbo.ETB_CURRENT_PROGRAM_WEIGHTS;
+GO
+IF EXISTS (SELECT * FROM sys.tables WHERE name = 'ETB_PROGRAM_WEIGHTS_AUDIT')  DROP TABLE dbo.ETB_PROGRAM_WEIGHTS_AUDIT;
+GO
+IF EXISTS (SELECT * FROM sys.tables WHERE name = 'ETB_PROGRAM_WEIGHTS')        DROP TABLE dbo.ETB_PROGRAM_WEIGHTS;
+GO
+IF EXISTS (SELECT * FROM sys.views WHERE name = 'ETB_STOCKOUTS')            DROP VIEW dbo.ETB_STOCKOUTS;
+GO
 IF EXISTS (SELECT * FROM sys.views WHERE name = 'ETB_V_CLIENT_295_STOCKOUTS')
     DROP VIEW dbo.ETB_V_CLIENT_295_STOCKOUTS;
 GO

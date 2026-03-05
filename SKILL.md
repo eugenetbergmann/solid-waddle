@@ -11,13 +11,16 @@ SQL view.
 ## Repository Layout
 
 ```
-sql/                      ← SINGLE SOURCE OF TRUTH (all 6 views)
+sql/                      ← SINGLE SOURCE OF TRUTH (all 9 sql files)
   01_etb_pab_auto.sql     ← View 1: PAB ledger foundation
   02_etb_ss_calc.sql      ← View 2: Safety stock calculation
   03_etb_wfq_pipe.sql     ← View 3: WFQ supply pipeline
   04_etb_pab_wfq_adj.sql  ← View 4: WFQ overlay + extended balance
-  05_etb_pab_supply_action.sql ← View 5: Supply action decision surface
+  05_etb_supply_action.sql     ← View 5: Supply action decision surface
   08_etb_v_client_295_stockouts.sql ← View 8: Client 295 stockout detection
+  09_etb_ralph_loop_37d.sql    ← View 9: 37-day horizon item-level flat table
+  10_etb_stockouts.sql         ← View 10: 180-day stockout aggregation
+  11_weighted_universe.sql     ← View 11: Weighted Universe (table + 3 views)
 
 docs/
   ARCHITECTURE.md         ← View hierarchy and dependency diagram
@@ -32,13 +35,13 @@ plans/
   archive/                ← Archived/completed planning documents
 ```
 
-**Note**: `sql/` is the single source of truth for all 6 views (Views 1–5 and 8).
+**Note**: `sql/` is the single source of truth for all views/objects (Views 1–5, 8–11).
 `pipeline-views/` and `analysis-views/` have been removed (Session 5).
 Views 6 (`ETB_RUN_RISK`) and 7 (`ETB_BUYER_CONTROL`) have been removed — not actively used.
 
 ---
 
-## The 6-View Pipeline (sql/)
+## The Pipeline (sql/)
 
 ```
 View 1: ETB_PAB_AUTO
@@ -49,10 +52,12 @@ View 3: ETB_WFQ_PIPE
   ↓ (WFQ lot inventory: release dates, expiry, age filter)
 View 4: ETB_PAB_WFQ_ADJ
   ↓ (WFQ overlay: stockout detection, extended balance, WFQ status)
-View 5: ETB_PAB_SUPPLY_ACTION
+View 5: ETB_PAB_SUPPLY_ACTION        [05_etb_supply_action.sql]
   ↓ SUFFICIENT / ORDER / BOTH / REVIEW_REQUIRED per demand row
-View 8: ETB_V_CLIENT_295_STOCKOUTS
-  → Client 295 stockout detection with shared demand analysis
+  ├─→ View 8: ETB_V_CLIENT_295_STOCKOUTS  — Client 295 stockout (item/run)
+  ├─→ View 9: ETB_RALPH_LOOP_37D          — 37-day flat table (manager export)
+  ├─→ View 10: ETB_STOCKOUTS              — 180-day aggregation
+  └─→ View 11: ETB_WEIGHTED_DEMAND / _SUMMARY + ETB_PROGRAM_WEIGHTS table
 ```
 
 Views 4 and 5 re-inline the full logic of Views 1–3 as CTEs for performance
@@ -128,7 +133,8 @@ Views 4 and 5 re-inline the full logic of Views 1–3 as CTEs for performance
 - **NEVER** use `ISNUMERIC` — use `TRY_CAST`
 - **ALWAYS** include `Config AS` CTE for business thresholds
 - **ALWAYS** use `COALESCE(NULLIF(PRIME_VNDR,''), 'UNASSIGNED')` fallback
-- `sql/` is the **single source of truth** for all 6 views — no `pipeline-views/` or `analysis-views/` directories
+- `sql/` is the **single source of truth** for all views — no `pipeline-views/` or `analysis-views/` directories
+- View 5 file is `05_etb_supply_action.sql` (renamed from `05_etb_pab_supply_action.sql` — March 2026)
 - Views 6 (`ETB_RUN_RISK`) and 7 (`ETB_BUYER_CONTROL`) have been **removed** — not actively used
 - Run `validate.sh` before every commit (pre-commit hook installed)
 
@@ -168,5 +174,6 @@ Experience template:
 
 ---
 
+*Version: 3.0 — Updated 2026-03-05 by session agent_1bdc4fce (Loop 8 — Post-merge sync: 05 rename, Views 10/11 registered)*
 *Version: 2.0 — Updated 2026-02-27 by session agent_50bd4285 (Loop 5 — Final Consolidation)*
-*Previous: 1.0 — Created 2026-02-27 by session agent_088db9de*
+*Version: 1.0 — Created 2026-02-27 by session agent_088db9de*
