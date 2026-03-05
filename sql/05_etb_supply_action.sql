@@ -55,6 +55,12 @@ Change Log:
 ================================================================================
 */
 
+-- *** CRITICAL NOTE ON CYCLE COUNT ***
+-- Cycle_Count_Status is NOT IMPLEMENTED and will ALWAYS return 'NEVER_COUNTED'
+-- This is intentional and permanent per human decision (March 2026).
+-- No live query on IV10300/IV10301/IV30700/IV30701 — columns exist only for structural compatibility.
+-- Do NOT present these columns as inventory accuracy findings.
+
 WITH
 
 -- ============================================================================
@@ -342,15 +348,19 @@ InventoryAgg AS
 ),
 
 -- ============================================================================
--- CycleCount: Last cycle count per item (Issue 3)
+-- CycleCount: Safe stub (human directive March 2026)
 -- ============================================================================
 CycleCount AS
 (
     SELECT
-            RTRIM(LTRIM(cc.ITEMNMBR))   AS ITEMNMBR,
-            MAX(CAST(cc.CYCLDATE AS date)) AS Last_Cycle_Count_Date
-    FROM    dbo.IV10300 cc WITH (NOLOCK)
-    GROUP BY RTRIM(LTRIM(cc.ITEMNMBR))
+        CAST(NULL AS varchar(31)) AS ITEMNMBR,
+        CAST(NULL AS date) AS Last_Cycle_Count_Date
+    -- *** INTENTIONAL NON-IMPLEMENTATION ***
+    -- Cycle count integration deliberately skipped per human direction (March 2026).
+    -- Reason: Cycle count status not desired / not required at this time.
+    -- All rows return Cycle_Count_Status = 'NEVER_COUNTED' and Days_Since_Last_Cycle_Count = NULL.
+    -- This is by design — do NOT interpret as inventory accuracy data.
+    -- If real data needed later, use IV30701 (posted history) with proper join on header date.
 ),
 
 -- ============================================================================
