@@ -37,8 +37,6 @@ CREATE TABLE dbo.ETB_PROGRAM_WEIGHTS_AUDIT
     Changed_At              DATETIME        NOT NULL DEFAULT (GETDATE())
 );
 
-CREATE VIEW dbo.ETB_CURRENT_PROGRAM_WEIGHTS
-AS
 SELECT 
     pw.Program_ID,
     pw.Program_Name,
@@ -51,8 +49,6 @@ SELECT
 FROM dbo.ETB_PROGRAM_WEIGHTS pw
 WHERE pw.Expiry_Date IS NULL OR pw.Expiry_Date >= CAST(GETDATE() AS DATE);
 
-CREATE VIEW dbo.ETB_WEIGHTED_DEMAND
-AS
 WITH Demand_Base AS (
     SELECT 
         s.ITEMNMBR,
@@ -116,8 +112,6 @@ SELECT
     CAST(GETDATE() AS date)             AS Analysis_Date
 FROM Weighted_Calc;
 
-CREATE VIEW dbo.ETB_WEIGHTED_SUMMARY
-AS
 SELECT 
     ITEMNMBR,
     ItemDescription,
