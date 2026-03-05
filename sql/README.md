@@ -34,18 +34,6 @@ Decision surface. Produces `Supply_Action_Recommendation` (SUFFICIENT / ORDER / 
 REVIEW_REQUIRED) and `Additional_Order_Qty` per demand row. Primary output for buyers.
 *(File renamed from `05_etb_pab_supply_action.sql` — March 2026)*
 
-### 08 — ETB_V_CLIENT_295_STOCKOUTS (`08_etb_v_client_295_stockouts.sql`)
-Client 295 stockout monitor. Item/run-level risk with shared demand analysis across
-all customers. References Views 4 and 5.
-
-### 09 — ETB_RALPH_LOOP_37D (`09_etb_ralph_loop_37d.sql`)
-Ralph Loop 37-Day Horizon Universal View. Single Excel-ready flat table (one row per
-item) covering all demand within the next 37 calendar days. Integrates item-level
-stockout flag + first deficit date, client-level stockout flag, program presence flags
-(Is291 / Is295 / Is298), and ETB supply coverage columns (ETB_PO_Status,
-ETB_WFQ_Status, ETB_Deficit_37D). Ordered by stockout severity for direct manager
-export. References View 5 (ETB_PAB_SUPPLY_ACTION) and dbo.CustomerMap.
-
 ### 10 — ETB_STOCKOUTS (`10_etb_stockouts.sql`)
 180-day forward stockout aggregation view (`dbo.ETB_STOCKOUTS`). Filters to
 `Data_Quality_Flag = 'CLEAN'` demand rows within the next 180 days, aggregates to
@@ -66,7 +54,7 @@ Governance precondition: weight changes require PO approval.
 
 ## Deployment Notes
 
-- **Deployment pattern:** Manual SSMS execution (paste-and-run). Files 01–10 are plain
+- **Deployment pattern:** Manual SSMS execution (paste-and-run). Files 01–07 are plain
   `WITH ... SELECT` statements. File 11 (`11_weighted_universe.sql`) uses
   `CREATE TABLE` and `CREATE OR ALTER VIEW` — execute in a single SSMS pass.
 - **Encoding:** All files must be plain ASCII / UTF-8 without BOM. Never author SQL
@@ -77,7 +65,7 @@ Governance precondition: weight changes require PO approval.
 - **View 5 rename:** File is `05_etb_supply_action.sql` — the database object name
   `dbo.ETB_PAB_SUPPLY_ACTION` is unchanged. All downstream views reference the object
   name, not the file name.
-- **Legacy views removed:** 08 (`etb_v_client_295_stockouts` v1 — 295 stockouts) and
-  09 (`etb_ralph_loop_37d` v1 — 37d transitional) superseded by `10_etb_stockouts.sql`.
+- **Legacy views removed:** Views 08 (`etb_v_client_295_stockouts`) and 09 (`etb_ralph_loop_37d`) 
+  superseded by `10_etb_stockouts.sql` (March 2026).
 
 See [`docs/DEPLOYMENT.md`](../docs/DEPLOYMENT.md) for full deployment sequence and validation queries.

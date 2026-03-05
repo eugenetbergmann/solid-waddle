@@ -7,20 +7,18 @@ A complete, production-ready SQL Server view pipeline that transforms raw manufa
 ## Repository Structure
 
 ```
-sql/                                     ← SINGLE SOURCE OF TRUTH (all 9 sql files)
+sql/                                     ← SINGLE SOURCE OF TRUTH (7 active sql files)
   01_etb_pab_auto.sql                    # View 1 — PAB ledger foundation
   02_etb_ss_calc.sql                     # View 2 — Safety stock calculation
   03_etb_wfq_pipe.sql                    # View 3 — WFQ pipeline source data
   04_etb_pab_wfq_adj.sql                 # View 4 — WFQ overlay + extended balance
   05_etb_supply_action.sql               # View 5 — Supply action decision surface
-  08_etb_v_client_295_stockouts.sql      # View 8 — Client 295 stockout detection
-  09_etb_ralph_loop_37d.sql              # View 9 — 37-day horizon flat table
   10_etb_stockouts.sql                   # View 10 — 180-day stockout aggregation
   11_weighted_universe.sql               # View 11 — Weighted Universe (table + 3 views)
 
 docs/
   ARCHITECTURE.md                        # View hierarchy & dependency diagram
-  CONTROL_LAYER.md                       # View 8 executive summary
+  CONTROL_LAYER.md                       # Deprecated — View 8 docs removed
   DEPLOYMENT.md                          # Installation instructions
 
 decisions/
@@ -36,6 +34,8 @@ validate.sh                              # Pre-commit validation (14 checkpoints
 they were not actively used. `pipeline-views/` and `analysis-views/` directories have
 been consolidated into `sql/` (Session 5 — 2026-02-27).
 View 5 file was renamed from `05_etb_pab_supply_action.sql` to `05_etb_supply_action.sql` (March 2026).
+
+**Deprecated / Removed**: Views 08 and 09 removed March 2026 — superseded by `ETB_STOCKOUTS` (file 10).
 
 ---
 
@@ -79,19 +79,14 @@ View 5 file was renamed from `05_etb_pab_supply_action.sql` to `05_etb_supply_ac
                      │  View 5: ETB_PAB_SUPPLY_     │
                      │  ACTION — Decision Surface    │
                      └──────┬──────────┬────────────┘
-                            │          │          │
-                            ▼          ▼          ▼
-             ┌─────────────────┐  ┌──────────┐  ┌──────────────────────┐
-             │ View 8:         │  │ View 10: │  │ View 11:             │
-             │ ETB_V_CLIENT_   │  │ ETB_     │  │ ETB_PROGRAM_WEIGHTS  │
-             │ 295_STOCKOUTS   │  │ STOCKOUTS│  │ ETB_WEIGHTED_DEMAND  │
-             └─────────────────┘  └──────────┘  │ ETB_WEIGHTED_SUMMARY │
-                                                 └──────────────────────┘
-             ┌─────────────────┐
-             │ View 9:         │
-             │ ETB_RALPH_LOOP_ │
-             │ 37D             │
-             └─────────────────┘
+                             │          │
+                             ▼          ▼
+              ┌─────────────────┐  ┌──────────┐  ┌──────────────────────┐
+              │ View 10:         │  │ View 11: │  │ View 11:             │
+              │ ETB_            │  │ ETB_     │  │ ETB_PROGRAM_WEIGHTS  │
+              │ STOCKOUTS       │  │ STOCKOUTS│  │ ETB_WEIGHTED_DEMAND  │
+              └─────────────────┘  └──────────┘  │ ETB_WEIGHTED_SUMMARY │
+                                                  └──────────────────────┘
 ```
 
 ---
@@ -105,8 +100,6 @@ View 5 file was renamed from `05_etb_pab_supply_action.sql` to `05_etb_supply_ac
 | 3 | `ETB_WFQ_PIPE` | `sql/03_etb_wfq_pipe.sql` | WFQ pipeline source: lot-level quarantine inventory with release estimates | `IV00300`, `IV00101` | Production |
 | 4 | `ETB_PAB_WFQ_ADJ` | `sql/04_etb_pab_wfq_adj.sql` | WFQ overlay: stockout detection, extended balance, WFQ status classification | Views 1–3 (re-inlined) + `Prosenthal_INV_BIN_QTY_wQTYTYPE`, `IV10300` | Production |
 | 5 | `ETB_PAB_SUPPLY_ACTION` | `sql/05_etb_supply_action.sql` | Final decision surface: deficit analysis, PO timing, supply action recommendations | Views 1–4 (re-inlined) | Production |
-| 8 | `ETB_V_CLIENT_295_STOCKOUTS` | `sql/08_etb_v_client_295_stockouts.sql` | Client 295 stockout detection: item/run-level risk with shared demand analysis | View 5 + View 2 + View 4 | Production |
-| 9 | `ETB_RALPH_LOOP_37D` | `sql/09_etb_ralph_loop_37d.sql` | 37-day horizon universal item-level view: stockout flag, client flags, program flags, ETB supply coverage | View 5 + `CustomerMap` | Production |
 | 10 | `ETB_STOCKOUTS` | `sql/10_etb_stockouts.sql` | 180-day forward stockout aggregation: program flags (291/295/298/301/303), max deficit, action counts | View 5 | Production |
 | 11 | `ETB_PROGRAM_WEIGHTS` + `ETB_WEIGHTED_DEMAND` + `ETB_WEIGHTED_SUMMARY` | `sql/11_weighted_universe.sql` | Weighted Universe: credibility weights table, RAW vs WEIGHTED demand delta views | View 5 | Production |
 
@@ -174,37 +167,6 @@ The final operational ledger combining all upstream logic. Calculates deficits, 
 | Default | Edge case | REVIEW_REQUIRED |
 
 **Key outputs**: `Supply_Action_Recommendation`, `Additional_Order_Qty`, `Deficit_Qty`, `PO_On_Time`, `Is_Past_Due_In_Backlog`, `Demand_Due_Date`
-
----
-
-### View 8 — `ETB_V_CLIENT_295_STOCKOUTS` (Client 295 Stockout Detection)
-
-Provides clear, actionable stockout signals scoped to Construct 295 while capturing market-wide demand context. The key design goal is one binary stockout signal per item/run — `Is_Stockout = YES/NO` — with full visibility into how much of the total demand Client 295 represents (`Shared_Demand_Ratio`).
-
-**4-step pipeline**:
-
-1. **`Client295_Demand`** — Non-suppressed positive-demand rows for `Construct = '295'`, bucketed by ISO year-week into `Run_Bucket`.
-2. **`AllCustomers_Demand` + `AggDemand_Summary`** — All customers' non-suppressed demand for the same item/run combinations. Aggregates `Aggregate_Demand_All_Customers`, `Customer_Count`, and `Affected_Customers` (STRING_AGG comma list).
-3. **`Stockout_Detection`** — Groups Client 295 rows by item/run and determines `Is_Stockout` (`YES` if `MIN(Adjusted_Running_Balance) < 0`), `Stockout_Qty` (ABS of min balance), and balance range.
-4. **`Final_Output`** — Joins steps 1–3, calculates `Shared_Demand_Ratio`, applies vendor fallback (`ETB_SS_CALC` → `ETB_PAB_SUPPLY_ACTION` → `ETB_PAB_WFQ_ADJ`), and emits the buyer-facing result set.
-
-**Key outputs**:
-
-| Column | Description |
-|--------|-------------|
-| `ITEMNMBR` | Item number |
-| `Item_Description` | Item description from vendor master |
-| `UOM` | Unit of measure |
-| `Run_Bucket` | ISO year-week run identifier (e.g. `2026-W09`) |
-| `Is_Stockout` | `YES` if `MIN(Adjusted_Running_Balance) < 0`, else `NO` |
-| `Stockout_Qty` | `ABS(MIN(Adjusted_Running_Balance))` when stocked out, else 0 |
-| `Client295_Demand` | Sum of Client 295's `Net_Demand` for this item/run |
-| `Aggregate_Demand_All_Customers` | Sum of ALL customers' `Net_Demand` for this item/run |
-| `Shared_Demand_Ratio` | `Client295_Demand / Aggregate_Demand_All_Customers` |
-| `Customer_Count` | Distinct customers sharing this item/run |
-| `Affected_Customers` | Comma-separated list of ALL customers sharing this item/run |
-| `Primary_Vendor` | Vendor via COALESCE: `ETB_SS_CALC` → `ETB_PAB_SUPPLY_ACTION` → `ETB_PAB_WFQ_ADJ` |
-| `WFQ_Dependency_Flag` | 1 if any row in this run has WFQ rescue/enhancement status |
 
 ---
 
@@ -286,10 +248,8 @@ Execute in order — each view depends on its predecessors:
 | 3 | `sql/03_etb_wfq_pipe.sql` | `dbo.ETB_WFQ_PIPE` |
 | 4 | `sql/04_etb_pab_wfq_adj.sql` | `dbo.ETB_PAB_WFQ_ADJ` |
 | 5 | `sql/05_etb_supply_action.sql` | `dbo.ETB_PAB_SUPPLY_ACTION` |
-| 6 | `sql/08_etb_v_client_295_stockouts.sql` | `dbo.ETB_V_CLIENT_295_STOCKOUTS` |
-| 7 | `sql/09_etb_ralph_loop_37d.sql` | `dbo.ETB_RALPH_LOOP_37D` |
-| 8 | `sql/10_etb_stockouts.sql` | `dbo.ETB_STOCKOUTS` |
-| 9 | `sql/11_weighted_universe.sql` | `dbo.ETB_PROGRAM_WEIGHTS` (table) + `dbo.ETB_PROGRAM_WEIGHTS_AUDIT` (table) + `dbo.ETB_CURRENT_PROGRAM_WEIGHTS` + `dbo.ETB_WEIGHTED_DEMAND` + `dbo.ETB_WEIGHTED_SUMMARY` |
+| 6 | `sql/10_etb_stockouts.sql` | `dbo.ETB_STOCKOUTS` |
+| 7 | `sql/11_weighted_universe.sql` | `dbo.ETB_PROGRAM_WEIGHTS` (table) + `dbo.ETB_PROGRAM_WEIGHTS_AUDIT` (table) + `dbo.ETB_CURRENT_PROGRAM_WEIGHTS` + `dbo.ETB_WEIGHTED_DEMAND` + `dbo.ETB_WEIGHTED_SUMMARY` |
 
 ### Validation
 
@@ -300,7 +260,6 @@ FROM sys.views
 WHERE name IN (
     'ETB_PAB_AUTO', 'ETB_SS_CALC', 'ETB_WFQ_PIPE',
     'ETB_PAB_WFQ_ADJ', 'ETB_PAB_SUPPLY_ACTION',
-    'ETB_V_CLIENT_295_STOCKOUTS', 'ETB_RALPH_LOOP_37D',
     'ETB_STOCKOUTS', 'ETB_CURRENT_PROGRAM_WEIGHTS',
     'ETB_WEIGHTED_DEMAND', 'ETB_WEIGHTED_SUMMARY'
 );
@@ -311,11 +270,11 @@ WHERE name IN ('ETB_PROGRAM_WEIGHTS', 'ETB_PROGRAM_WEIGHTS_AUDIT');
 
 -- Row count check
 SELECT 'ETB_PAB_SUPPLY_ACTION' AS View_Name, COUNT(*) AS Rows FROM dbo.ETB_PAB_SUPPLY_ACTION
-UNION ALL SELECT 'ETB_V_CLIENT_295_STOCKOUTS', COUNT(*) FROM dbo.ETB_V_CLIENT_295_STOCKOUTS;
+UNION ALL SELECT 'ETB_STOCKOUTS', COUNT(*) FROM dbo.ETB_STOCKOUTS;
 
--- Verify no NULL vendors
-SELECT 'ETB_V_CLIENT_295_STOCKOUTS' AS View_Name, COUNT(*) AS Null_Vendors
-FROM dbo.ETB_V_CLIENT_295_STOCKOUTS WHERE Primary_Vendor IS NULL;
+-- Verify ETB_STOCKOUTS aggregation
+SELECT 'ETB_STOCKOUTS' AS View_Name, COUNT(*) AS Item_Count
+FROM dbo.ETB_STOCKOUTS;
 ```
 
 ### Rollback
@@ -328,8 +287,6 @@ IF EXISTS (SELECT 1 FROM sys.views WHERE name = 'ETB_CURRENT_PROGRAM_WEIGHTS') D
 IF EXISTS (SELECT 1 FROM sys.tables WHERE name = 'ETB_PROGRAM_WEIGHTS_AUDIT') DROP TABLE dbo.ETB_PROGRAM_WEIGHTS_AUDIT;
 IF EXISTS (SELECT 1 FROM sys.tables WHERE name = 'ETB_PROGRAM_WEIGHTS') DROP TABLE dbo.ETB_PROGRAM_WEIGHTS;
 IF EXISTS (SELECT 1 FROM sys.views WHERE name = 'ETB_STOCKOUTS') DROP VIEW dbo.ETB_STOCKOUTS;
-IF EXISTS (SELECT 1 FROM sys.views WHERE name = 'ETB_RALPH_LOOP_37D') DROP VIEW dbo.ETB_RALPH_LOOP_37D;
-IF EXISTS (SELECT 1 FROM sys.views WHERE name = 'ETB_V_CLIENT_295_STOCKOUTS') DROP VIEW dbo.ETB_V_CLIENT_295_STOCKOUTS;
 IF EXISTS (SELECT 1 FROM sys.views WHERE name = 'ETB_PAB_SUPPLY_ACTION') DROP VIEW dbo.ETB_PAB_SUPPLY_ACTION;
 IF EXISTS (SELECT 1 FROM sys.views WHERE name = 'ETB_PAB_WFQ_ADJ') DROP VIEW dbo.ETB_PAB_WFQ_ADJ;
 IF EXISTS (SELECT 1 FROM sys.views WHERE name = 'ETB_WFQ_PIPE') DROP VIEW dbo.ETB_WFQ_PIPE;
@@ -371,17 +328,14 @@ IF EXISTS (SELECT 1 FROM sys.views WHERE name = 'ETB_PAB_AUTO') DROP VIEW dbo.ET
 
 2. **Cumulative WFQ Overlay**: WFQ supply is summed cumulatively by due date. A consume-once waterfall model is not currently implemented.
 
-3. **Vendor Fallback Hierarchy**: View 8 uses a three-tier vendor resolution strategy: `ETB_SS_CALC` → `ETB_PAB_SUPPLY_ACTION` → `ETB_PAB_WFQ_ADJ`, ensuring complete vendor coverage.
+3. **MAX Aggregation for Description/UOM**: `ItemDescription` and `UOM` use `MAX()` in aggregation CTEs rather than being added to `GROUP BY`, preserving rollup cardinality.
 
-4. **MAX Aggregation for Description/UOM**: `ItemDescription` and `UOM` use `MAX()` in aggregation CTEs rather than being added to `GROUP BY`, preserving rollup cardinality.
-
-5. **No Table Modifications**: The entire pipeline operates through views only. No staging tables, temp tables, or data modifications.
+4. **No Table Modifications**: The entire pipeline operates through views only. No staging tables, temp tables, or data modifications.
 
 ---
 
 ## Documentation
 
 - **[Architecture](docs/ARCHITECTURE.md)** — View hierarchy diagram and dependency map
-- **[Control Layer](docs/CONTROL_LAYER.md)** — Detailed documentation for View 8
 - **[Deployment](docs/DEPLOYMENT.md)** — Step-by-step installation instructions
 - **[SKILL.md](SKILL.md)** — Quick-start guide for agents and developers

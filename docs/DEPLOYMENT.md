@@ -4,7 +4,7 @@
 
 Execute views in the following order to maintain dependency integrity.
 Views 4 and 5 re-inline Views 1–3 as CTEs (no view-on-view chaining in the hot path),
-but the underlying database views must still exist before View 8 can reference them.
+but the underlying database views must still exist before downstream views can reference them.
 
 | Step | Object | File | Notes |
 |------|--------|------|-------|
@@ -13,22 +13,18 @@ but the underlying database views must still exist before View 8 can reference t
 | 3 | ETB_WFQ_PIPE | `sql/03_etb_wfq_pipe.sql` | WFQ supply pipeline — lot-level quarantine inventory with release estimates |
 | 4 | ETB_PAB_WFQ_ADJ | `sql/04_etb_pab_wfq_adj.sql` | WFQ overlay — stockout detection, extended balance, WFQ status. Session 5: Smart quotes fixed, IV10300 stub (no cycle count data), CREATE VIEW removed. |
 | 5 | ETB_PAB_SUPPLY_ACTION | `sql/05_etb_supply_action.sql` | Decision surface — SUFFICIENT/ORDER/BOTH/REVIEW_REQUIRED per demand row |
-| 6 | ETB_V_CLIENT_295_STOCKOUTS | `sql/08_etb_v_client_295_stockouts.sql` | Client 295 stockout detection — item/run-level risk with shared demand analysis |
-| 7 | ETB_STOCKOUTS | `sql/10_etb_stockouts.sql` | 180-day forward stockout aggregation — program flags, max deficit, action counts |
-| 8 | ETB_PROGRAM_WEIGHTS + ETB_WEIGHTED_DEMAND + ETB_WEIGHTED_SUMMARY | `sql/11_weighted_universe.sql` | Weighted Universe — credibility weights table/views, RAW vs WEIGHTED demand deltas |
+| 6 | ETB_STOCKOUTS | `sql/10_etb_stockouts.sql` | 180-day forward stockout aggregation — program flags, max deficit, action counts |
+| 7 | ETB_PROGRAM_WEIGHTS + ETB_WEIGHTED_DEMAND + ETB_WEIGHTED_SUMMARY | `sql/11_weighted_universe.sql` | Weighted Universe — credibility weights table/views, RAW vs WEIGHTED demand deltas |
 
-**Dependency note**: View 8 consumes `dbo.ETB_PAB_SUPPLY_ACTION` (View 5),
-`dbo.ETB_SS_CALC` (View 2), and `dbo.ETB_PAB_WFQ_ADJ` (View 4).
-`ETB_STOCKOUTS` (step 7) and the Weighted Universe objects (step 8) both consume
-`dbo.ETB_PAB_SUPPLY_ACTION` (View 5).
-Always deploy in the order above.
+**Dependency note**: `ETB_STOCKOUTS` (step 6) and the Weighted Universe objects (step 7) both consume
+`dbo.ETB_PAB_SUPPLY_ACTION` (View 5). Always deploy in the order above.
 
-**Step 8 note**: `sql/11_weighted_universe.sql` creates a TABLE (`ETB_PROGRAM_WEIGHTS`),
+**Step 7 note**: `sql/11_weighted_universe.sql` creates a TABLE (`ETB_PROGRAM_WEIGHTS`),
 an audit TABLE (`ETB_PROGRAM_WEIGHTS_AUDIT`), and three views. Deploy via SSMS in
 a single execution pass. Weights are editable in `dbo.ETB_PROGRAM_WEIGHTS`.
 
-**Removed views**: Views 6 (`ETB_RUN_RISK`) and 7 (`ETB_BUYER_CONTROL`) have been
-removed from the pipeline — they were not actively used.
+**Removed views**: Views 6 (`ETB_RUN_RISK`), 7 (`ETB_BUYER_CONTROL`), 08 (`ETB_V_CLIENT_295_STOCKOUTS`), 
+and 09 (`ETB_RALPH_LOOP_37D`) have been removed from the pipeline — superseded by `ETB_STOCKOUTS` (file 10).
 
 ---
 
@@ -63,8 +59,6 @@ for f in sql/01_etb_pab_auto.sql \
           sql/03_etb_wfq_pipe.sql \
           sql/04_etb_pab_wfq_adj.sql \
           sql/05_etb_supply_action.sql \
-          sql/08_etb_v_client_295_stockouts.sql \
-          sql/09_etb_ralph_loop_37d.sql \
           sql/10_etb_stockouts.sql \
           sql/11_weighted_universe.sql; do
     echo "Deploying $f..."
@@ -138,16 +132,6 @@ SELECT TOP 5 * FROM dbo.ETB_CURRENT_PROGRAM_WEIGHTS;
 SELECT TOP 5 ITEMNMBR, RAW_Net_Demand, Weighted_Net_Demand, Program_Weight FROM dbo.ETB_WEIGHTED_DEMAND;
 ```
 
-### View 8 — ETB_V_CLIENT_295_STOCKOUTS
-
-```sql
-SELECT * FROM sys.views WHERE name = 'ETB_V_CLIENT_295_STOCKOUTS';
-SELECT TOP 5
-    ITEMNMBR, Run_Bucket, Is_Stockout, Stockout_Qty,
-    Client295_Demand, Aggregate_Demand_All_Customers, Primary_Vendor
-FROM dbo.ETB_V_CLIENT_295_STOCKOUTS;
-```
-
 ---
 
 ## Validation Checklist
@@ -157,7 +141,6 @@ FROM dbo.ETB_V_CLIENT_295_STOCKOUTS;
 - [ ] Views return expected columns
 - [ ] `Supply_Action_Recommendation` populated for all rows in View 5
 - [ ] No NULL values in `PRIME_VNDR` (should be `'UNASSIGNED'` as fallback)
-- [ ] `Is_Stockout` column populated in View 8
 - [ ] `ETB_STOCKOUTS` returns rows with `HAVING MIN < 0` filter active
 - [ ] `ETB_PROGRAM_WEIGHTS` table created; populate weights before querying `ETB_WEIGHTED_DEMAND`
 
@@ -178,9 +161,6 @@ GO
 IF EXISTS (SELECT * FROM sys.tables WHERE name = 'ETB_PROGRAM_WEIGHTS')        DROP TABLE dbo.ETB_PROGRAM_WEIGHTS;
 GO
 IF EXISTS (SELECT * FROM sys.views WHERE name = 'ETB_STOCKOUTS')            DROP VIEW dbo.ETB_STOCKOUTS;
-GO
-IF EXISTS (SELECT * FROM sys.views WHERE name = 'ETB_V_CLIENT_295_STOCKOUTS')
-    DROP VIEW dbo.ETB_V_CLIENT_295_STOCKOUTS;
 GO
 IF EXISTS (SELECT * FROM sys.views WHERE name = 'ETB_PAB_SUPPLY_ACTION')
     DROP VIEW dbo.ETB_PAB_SUPPLY_ACTION;
@@ -214,13 +194,16 @@ GO
 | `Is_Past_Due_In_Backlog` | 1 if demand due date has passed |
 | `Data_Quality_Flag` | `CLEAN`, `MISSING_VENDOR`, `MISSING_COST`, `MISSING_BOTH`, `NON_WC_SITE` |
 
-### View 8 — ETB_V_CLIENT_295_STOCKOUTS (Client 295 Monitor)
+### View 10 — ETB_STOCKOUTS (180-Day Aggregation)
 
 | Column | Description |
 |--------|-------------|
-| `Is_Stockout` | `YES` / `NO` — stockout flag for this item/run |
-| `Stockout_Qty` | Absolute depth of worst deficit |
-| `Client295_Demand` | Client 295's demand for this item/run |
-| `Aggregate_Demand_All_Customers` | Total market demand for this item/run |
-| `Shared_Demand_Ratio` | Client 295's share of total demand |
-| `Affected_Customers` | Comma-separated list of all customers sharing this item/run |
+| `Item_Number` | Item identifier |
+| `First_Deficit_Date` | Earliest demand due date with deficit |
+| `Min_Projected_Stockout` | Worst projected balance (MIN) |
+| `Max_Deficit_180D` | Largest single demand deficit |
+| `Program_291_Flag` ... `Program_303_Flag` | 1 if item has demand from that construct |
+| `COUNT_ORDER` | Count of ORDER supply action rows |
+| `COUNT_BOTH` | Count of BOTH supply action rows |
+| `URGENT_COUNT` | ORDER/BOTH rows due within 10 days |
+| `WFQ_Rescue_Count` | Count of WFQ_RESCUED demand rows |
