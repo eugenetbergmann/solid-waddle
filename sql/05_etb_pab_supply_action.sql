@@ -116,7 +116,7 @@ m_norm AS
                     UPPER(LTRIM(RTRIM(CONVERT(varchar(255),
                         REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(
                             m.ORDERNUMBER,
-                            'MO', ''), '-', ''), ' ', ''), '/', ''), '.', ''), '#', ')))))
+                            'MO', ''), '-', ''), ' ', ''), '/', ''), '.', ''), '#', '')))))
                     , m.FG
                 ORDER BY m.Customer, m.[FG Desc], m.ORDERNUMBER
             )                                                   AS rn_fg
