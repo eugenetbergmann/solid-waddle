@@ -208,17 +208,17 @@ if grep -q "ETB_WFQ_PIPE" sql/05_etb_supply_action.sql; then
 else
     fail "View 5 does NOT reference ETB_WFQ_PIPE"
 fi
-# View 10 should reference ETB_PAB_SUPPLY_ACTION
-if grep -q "ETB_PAB_SUPPLY_ACTION" sql/10_etb_stockouts.sql; then
-    pass "View 10 references ETB_PAB_SUPPLY_ACTION"
+# View 10 should reference ETB_SUPPLY_ACTION
+if grep -q "ETB_SUPPLY_ACTION" sql/10_etb_stockouts.sql; then
+    pass "View 10 references ETB_SUPPLY_ACTION"
 else
-    fail "View 10 does NOT reference ETB_PAB_SUPPLY_ACTION"
+    fail "View 10 does NOT reference ETB_SUPPLY_ACTION"
 fi
-# View 11 should reference ETB_PAB_SUPPLY_ACTION
-if grep -q "ETB_PAB_SUPPLY_ACTION" sql/11_weighted_universe.sql; then
-    pass "View 11 references ETB_PAB_SUPPLY_ACTION"
+# View 11 should reference ETB_SUPPLY_ACTION
+if grep -q "ETB_SUPPLY_ACTION" sql/11_weighted_universe.sql; then
+    pass "View 11 references ETB_SUPPLY_ACTION"
 else
-    fail "View 11 does NOT reference ETB_PAB_SUPPLY_ACTION"
+    fail "View 11 does NOT reference ETB_SUPPLY_ACTION"
 fi
 
 # =============================================================================
