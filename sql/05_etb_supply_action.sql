@@ -19,7 +19,7 @@ Purpose:
   classification for buyer workflow prioritization.
 
   This is the primary buyer-facing decision surface for the pipeline.
-  View 8 (ETB_V_CLIENT_295_STOCKOUTS) consumes this view for Client 295 analysis.
+  View 10 (ETB_STOCKOUTS) and View 11 (Weighted Universe) consume this view.
 
 Source / Dependency:
   This view re-materializes all of Views 1–4 inline (same CTE chain).
@@ -822,7 +822,7 @@ Supply_Action_Decision AS
 )
 
 -- ============================================================================
--- Output: View 5 columns — consumed by View 8 (ETB_V_CLIENT_295_STOCKOUTS)
+-- Output: View 5 columns — consumed by View 10 (ETB_STOCKOUTS) and View 11 (Weighted Universe)
 -- ============================================================================
 SELECT
     ITEMNMBR,

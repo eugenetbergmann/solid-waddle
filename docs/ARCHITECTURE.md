@@ -49,8 +49,7 @@ performance (no view-on-view chaining in the hot path). Views 10 and 11
 consume `dbo.ETB_PAB_SUPPLY_ACTION` (View 5) only.
 
 Views 6 (`ETB_RUN_RISK`) and 7 (`ETB_BUYER_CONTROL`) have been **removed** —
-they were not actively used and have been superseded by View 8 for control
-layer functionality.
+they were not actively used.
 
 ---
 
