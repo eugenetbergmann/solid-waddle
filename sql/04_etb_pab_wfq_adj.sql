@@ -73,16 +73,20 @@ Change Log:
 WITH
 
 -- ============================================================================
--- Config: Named threshold constants (Issue 8)
+-- Config: Named threshold constants (Ralph Loop enforced — Issue 8)
+-- All values are organizational decisions; change via PR + manager approval
 -- ============================================================================
 Config AS
 (
     SELECT
-        7   AS Stale_Suppression_Days,    -- Days past due for stale suppression
-        7   AS Fence_Suppression_Days,    -- Near-term fence window (days forward)
-        45  AS WC_Inventory_Age_Days,     -- Max age of active WC bin inventory
-        90  AS Cycle_Count_Overdue_Days,  -- Days before cycle count is OVERDUE
-        7   AS Early_Issue_Flag_Days      -- Early issue detection threshold
+        7   AS Stale_Suppression_Days,          -- Days past due to suppress stale/unissued demand
+        7   AS Fence_Suppression_Days,          -- Forward fence days for full-coverage suppression
+        45  AS WC_Inventory_Age_Days,           -- Max age (days) for WC bin inventory to count as active
+        90  AS Cycle_Count_Overdue_Days,        -- Days since last count before OVERDUE flag (stubbed anyway)
+        7   AS Early_Issue_Flag_Days,           -- Days before due date for early-issue warning
+        5   AS Urgent_PO_Days,                  -- Days to deficit/stockout for URGENT priority
+        10  AS Warning_PO_Days,                 -- Days to deficit/stockout for WARNING priority
+        3   AS WFQ_Priority_Window_Days         -- WFQ allocation priority window (days)
 ),
 
 -- ============================================================================
