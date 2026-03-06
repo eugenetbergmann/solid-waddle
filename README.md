@@ -75,9 +75,9 @@ View 5 file was renamed from `05_etb_pab_supply_action.sql` to `05_etb_supply_ac
                     └──────────────┬───────────────┘
                                    │
                                    ▼
-                     ┌─────────────────────────────┐
-                     │  View 5: ETB_PAB_SUPPLY_     │
-                     │  ACTION — Decision Surface    │
+                      ┌─────────────────────────────┐
+                      │  View 5: ETB_PAB_SUPPLY_ACTION│
+                      │  Decision Surface            │
                      └──────┬──────────┬────────────┘
                              │          │
                              ▼          ▼
@@ -100,7 +100,7 @@ View 5 file was renamed from `05_etb_pab_supply_action.sql` to `05_etb_supply_ac
 | 3 | `ETB_WFQ_PIPE` | `sql/03_etb_wfq_pipe.sql` | WFQ pipeline source: lot-level quarantine inventory with release estimates | `IV00300`, `IV00101` | Production |
 | 4 | `ETB_PAB_WFQ_ADJ` | `sql/04_etb_pab_wfq_adj.sql` | WFQ overlay: stockout detection, extended balance, WFQ status classification | Views 1–3 (re-inlined) + `Prosenthal_INV_BIN_QTY_wQTYTYPE`, `IV10300` | Production |
 | 5 | `ETB_PAB_SUPPLY_ACTION` | `sql/05_etb_supply_action.sql` | Final decision surface: deficit analysis, PO timing, supply action recommendations | Views 1–4 (re-inlined) | Production |
-| 10 | `ETB_STOCKOUTS` | `sql/10_etb_stockouts.sql` | 180-day forward stockout aggregation: program flags (291/295/298/301/303), max deficit, action counts | View 5 | Production |
+| 10 | `ETB_STOCKOUTS` | `sql/10_etb_stockouts.sql` | 180-day forward stockout aggregation: program flags ([291], [295], [298], [301], [303]), max deficit, action counts | View 5 | Production |
 | 11 | `ETB_PROGRAM_WEIGHTS` + `ETB_WEIGHTED_DEMAND` + `ETB_WEIGHTED_SUMMARY` | `sql/11_weighted_universe.sql` | Weighted Universe: credibility weights table, RAW vs WEIGHTED demand delta views | View 5 | Production |
 
 ---
@@ -182,7 +182,7 @@ Aggregates active, clean-data demand rows from `ETB_PAB_SUPPLY_ACTION` into a pe
 | `First_Deficit_Date` | Earliest demand due date with a deficit |
 | `Min_Projected_Stockout` | `MIN(Adjusted_Running_Balance)` — worst projected balance |
 | `Max_Deficit_180D` | `MAX(Deficit_Qty)` — worst single demand deficit |
-| `Program_291_Flag` … `Program_303_Flag` | 1 if item has demand from that construct |
+| `[291]`, `[295]`, `[298]`, `[301]`, `[303]` | 1 if item has demand from that construct |
 | `COUNT_ORDER` | Count of ORDER supply action rows |
 | `COUNT_BOTH` | Count of BOTH supply action rows |
 | `URGENT_COUNT` | ORDER/BOTH rows due within 10 days |
