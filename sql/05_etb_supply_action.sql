@@ -136,7 +136,7 @@ m_norm AS
 item_desc AS
 (
     SELECT  [Item Number]   AS ItemNumber,
-            ITEMDESC        AS ItemDescription,
+            REPLACE(ITEMDESC, '''', '''''')        AS ItemDescription,
             UOMSCHDL
     FROM    dbo.Prosenthal_Vendor_Items
     WHERE   Active = 'Yes'
@@ -376,12 +376,16 @@ WithInventory AS
                  ELSE DATEDIFF(DAY, cc.Last_Cycle_Count_Date, CAST(GETDATE() AS date))
             END                                                 AS Days_Since_Last_Cycle_Count,
             CASE WHEN cc.Last_Cycle_Count_Date IS NULL
-                     THEN 'NEVER_COUNTED'
-                 WHEN DATEDIFF(DAY, cc.Last_Cycle_Count_Date, CAST(GETDATE() AS date))
-                      > (SELECT cfg.Cycle_Count_Overdue_Days FROM Config cfg)
-                     THEN 'OVERDUE'
-                 ELSE 'CURRENT'
-            END                                                 AS Cycle_Count_Status
+                      THEN 'NEVER_COUNTED'
+                  WHEN DATEDIFF(DAY, cc.Last_Cycle_Count_Date, CAST(GETDATE() AS date))
+                       > (SELECT cfg.Cycle_Count_Overdue_Days FROM Config cfg)
+                      THEN 'OVERDUE'
+                  ELSE 'CURRENT'
+             END                                                 AS Cycle_Count_Status,
+            CASE WHEN cc.Last_Cycle_Count_Date IS NULL
+                      THEN 'CycleCount intentionally stubbed — placeholder data only (1900-01-01 dates). Real integration blocked until production cycle count process exists. See governance precondition in context package.'
+                  ELSE NULL
+             END                                                 AS Status_Explanation
     FROM    Base b
     LEFT  JOIN InventoryAgg inv
            ON  b.ITEMNMBR     = inv.Item_Number
@@ -725,20 +729,22 @@ Balance_Analysis AS
 
 -- ============================================================================
 -- WFQ_Turnaround_Analysis: PO turnaround days per item from WFQ pipe
+-- Aggregated to ITEMNMBR level (MIN(Estimated_Release_Date)) to prevent fan-out
 -- ============================================================================
 WFQ_Turnaround_Analysis AS
 (
     SELECT
             ITEM_Number                 AS ITEMNMBR,
-            Estimated_Release_Date,
-            CASE WHEN Estimated_Release_Date IS NOT NULL
-                  AND Estimated_Release_Date >= CAST(GETDATE() AS date)
-                 THEN DATEDIFF(DAY, CAST(GETDATE() AS date), Estimated_Release_Date)
+            MIN(Estimated_Release_Date) AS Estimated_Release_Date,
+            CASE WHEN MIN(Estimated_Release_Date) IS NOT NULL
+                  AND MIN(Estimated_Release_Date) >= CAST(GETDATE() AS date)
+                 THEN DATEDIFF(DAY, CAST(GETDATE() AS date), MIN(Estimated_Release_Date))
                  ELSE 0
             END                         AS PO_Turn_Around_Days,
-            Estimated_Release_Date      AS PO_Actual_Arrival_Date
+            MIN(Estimated_Release_Date) AS PO_Actual_Arrival_Date
     FROM    dbo.ETB_WFQ_PIPE
     WHERE   View_Level = 'ITEM_LEVEL'
+    GROUP BY ITEM_Number
 ),
 
 -- ============================================================================
@@ -850,6 +856,7 @@ SELECT
     Last_Cycle_Count_Date,          -- Issue 3
     Days_Since_Last_Cycle_Count,    -- Issue 3
     Cycle_Count_Status,             -- Issue 3
+    Status_Explanation,             -- Issue 3: CycleCount stub explanation
     VendorItem,
     PRIME_VNDR,
     Vendor_Data_Source,             -- Issue 4

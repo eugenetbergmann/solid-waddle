@@ -142,7 +142,7 @@ m_norm AS
 item_desc AS
 (
     SELECT  [Item Number]   AS ItemNumber,
-            ITEMDESC        AS ItemDescription,
+            REPLACE(ITEMDESC, '''', '''''')        AS ItemDescription,
             UOMSCHDL
     FROM    dbo.Prosenthal_Vendor_Items
     WHERE   Active = 'Yes'
@@ -378,6 +378,9 @@ InventoryAgg AS
 
 -- ============================================================================
 -- CycleCount: Last cycle count per item (Issue 3)
+-- CycleCount intentionally stubbed — placeholder data only (1900-01-01 dates)
+-- Real integration blocked until production cycle count process exists
+-- See governance precondition in context package
 -- Session 5 fix: dbo.IV10300 does not exist in target environment.
 -- Stubbed with WHERE 1=0 to return zero rows; output columns preserved as NULL
 -- for schema compatibility with downstream views (View 5).
@@ -403,12 +406,16 @@ WithInventory AS
                  ELSE DATEDIFF(DAY, cc.Last_Cycle_Count_Date, CAST(GETDATE() AS date))
             END                                                 AS Days_Since_Last_Cycle_Count,
             CASE WHEN cc.Last_Cycle_Count_Date IS NULL
-                     THEN 'NEVER_COUNTED'
-                 WHEN DATEDIFF(DAY, cc.Last_Cycle_Count_Date, CAST(GETDATE() AS date))
-                      > (SELECT cfg.Cycle_Count_Overdue_Days FROM Config cfg)
-                     THEN 'OVERDUE'
-                 ELSE 'CURRENT'
-            END                                                 AS Cycle_Count_Status
+                      THEN 'NEVER_COUNTED'
+                  WHEN DATEDIFF(DAY, cc.Last_Cycle_Count_Date, CAST(GETDATE() AS date))
+                       > (SELECT cfg.Cycle_Count_Overdue_Days FROM Config cfg)
+                      THEN 'OVERDUE'
+                  ELSE 'CURRENT'
+             END                                                 AS Cycle_Count_Status,
+            CASE WHEN cc.Last_Cycle_Count_Date IS NULL
+                      THEN 'CycleCount intentionally stubbed — placeholder data only (1900-01-01 dates). Real integration blocked until production cycle count process exists. See governance precondition in context package.'
+                  ELSE NULL
+             END                                                 AS Status_Explanation
     FROM    Base b
     LEFT  JOIN InventoryAgg inv
            ON  b.ITEMNMBR     = inv.Item_Number
@@ -791,6 +798,7 @@ SELECT
     Last_Cycle_Count_Date,          -- Issue 3
     Days_Since_Last_Cycle_Count,    -- Issue 3
     Cycle_Count_Status,             -- Issue 3
+    Status_Explanation,             -- Issue 3: CycleCount stub explanation
     VendorItem,
     PRIME_VNDR,
     Vendor_Data_Source,             -- Issue 4
