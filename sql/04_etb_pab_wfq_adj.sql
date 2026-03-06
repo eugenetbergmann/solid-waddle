@@ -581,6 +581,7 @@ ETB_WC_INV AS
             Last_Cycle_Count_Date,
             Days_Since_Last_Cycle_Count,
             Cycle_Count_Status,
+            Status_Explanation,                                   -- Added to fix invalid column error
             VendorItem,
             PRIME_VNDR,
             Vendor_Data_Source,
@@ -610,6 +611,7 @@ Demand_Ledger AS
             Inventory_Qty_Available, Suppression_Status, Is_Suppressed,
             Has_Issued, IssueDate_Mismatch, Early_Issue_Flag,
             Last_Cycle_Count_Date, Days_Since_Last_Cycle_Count, Cycle_Count_Status,
+            Status_Explanation,                                   -- Added to fix invalid column error
             VendorItem, PRIME_VNDR, Vendor_Data_Source,
             PURCHASING_LT, PLANNING_LT, ORDER_POINT_QTY, SAFETY_STOCK,
             FG, [FG Desc], STSDESCR, MRPTYPE, Unified_Value
