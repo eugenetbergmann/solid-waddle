@@ -10,68 +10,14 @@
 --           FOR XML PATH fallback per design memo §13
 -- Runs:     Idempotent — safe to re-run; prereq tables guarded by
 --           IF NOT EXISTS; views use CREATE OR ALTER
--- Order:    1) Prerequisites  2) ETB_SUPPLY_CONFIDENCE
---           3) ETB_SUPPLY_CONFIDENCE_DETAIL  4) Validation tests
--- Governance: ETB_SUPPLY_CONFIDENCE_DESIGN_MEMO_v1.5.md
+-- Order:    1) ETB_SUPPLY_CONFIDENCE  2) ETB_SUPPLY_CONFIDENCE_DETAIL
+--           3) Validation tests
+-- Note:     No tables are created. All objects are views.
+-- Governance: ETB_SUPPLY_CONFIDENCE_DESIGN_MEMO_v1.6.md
 -- ============================================================
 
 
--- ============================================================
--- SECTION 1 — PREREQUISITE TABLES
--- ============================================================
 
-IF NOT EXISTS (
-    SELECT 1 FROM sys.tables
-    WHERE name = 'ETB_MANUFACTURER_SOURCE_MAP'
-      AND schema_id = SCHEMA_ID('dbo')
-)
-BEGIN
-    CREATE TABLE dbo.ETB_MANUFACTURER_SOURCE_MAP (
-        ITEMNMBR           varchar(31)   NOT NULL,  -- matches IV00101.ITEMNMBR
-        Manufacturer_1     varchar(255)  NOT NULL,
-        Manufacturer_2     varchar(255)  NOT NULL,  -- min condition for row to exist
-        Manufacturer_3     varchar(255)  NULL,       -- NULL for DUAL; populated for TRIPLE
-        Manufacturer_Count tinyint       NOT NULL,  -- 2 or 3; never 1
-        Source_Type        varchar(10)   NOT NULL,  -- 'DUAL' or 'TRIPLE'
-        Notes              varchar(1000) NULL,
-        Last_Reviewed      date          NOT NULL,
-        CONSTRAINT PK_ETB_MANUFACTURER_SOURCE_MAP
-            PRIMARY KEY CLUSTERED (ITEMNMBR),
-        CONSTRAINT CHK_MSM_Count
-            CHECK (Manufacturer_Count IN (2, 3)),
-        CONSTRAINT CHK_MSM_Type
-            CHECK (Source_Type IN ('DUAL', 'TRIPLE')),
-        CONSTRAINT CHK_MSM_Triple
-            CHECK (Source_Type <> 'TRIPLE' OR Manufacturer_3 IS NOT NULL)
-    );
-    PRINT 'Created dbo.ETB_MANUFACTURER_SOURCE_MAP';
-END
-ELSE
-    PRINT 'dbo.ETB_MANUFACTURER_SOURCE_MAP already exists — skipped';
-
-GO
-
-IF NOT EXISTS (
-    SELECT 1 FROM sys.tables
-    WHERE name = 'ETB_SDA_SNAPSHOT'
-      AND schema_id = SCHEMA_ID('dbo')
-)
-BEGIN
-    CREATE TABLE dbo.ETB_SDA_SNAPSHOT (
-        ITEMNMBR              varchar(31) NOT NULL,
-        Snapshot_Date         date        NOT NULL,
-        Demand_Pressure_Ratio float       NULL,
-        MO_Count              int         NULL,
-        Days_Until_First_Need int         NULL,
-        CONSTRAINT PK_ETB_SDA_SNAPSHOT
-            PRIMARY KEY CLUSTERED (ITEMNMBR, Snapshot_Date)
-    );
-    PRINT 'Created dbo.ETB_SDA_SNAPSHOT';
-END
-ELSE
-    PRINT 'dbo.ETB_SDA_SNAPSHOT already exists — skipped';
-
-GO
 
 
 -- ============================================================
@@ -127,7 +73,7 @@ SharedBase AS (
         sa.WFQ_Extended_Status,       -- pass through; do not recompute
         sa.Suppression_Status,
         sa.PURCHASING_LT,
-        sa.PRIME_VNDR,
+
         sa.Data_Quality_Flag,
         sa.ItemDescription,
         sa.Supply_Action_Recommendation,
@@ -156,9 +102,7 @@ SharedDetection AS (
         MAX(sb.Ledger_Extended_Balance) AS Ledger_Extended_Balance,
         -- item-level; identical on every row; MAX is safe
         MAX(sb.Effective_LT)           AS Effective_LT,
-        MAX(sb.ItemDescription)        AS ItemDescription,
-        COALESCE(NULLIF(MAX(sb.PRIME_VNDR), ''), 'UNASSIGNED') AS PRIME_VNDR
-        -- UNASSIGNED fallback per CP-7
+        MAX(sb.ItemDescription)        AS ItemDescription
     FROM SharedBase sb
     GROUP BY sb.ITEMNMBR
 ),
@@ -191,7 +135,7 @@ QualifiedItems AS (
         sd.Ledger_Extended_Balance,
         sd.Effective_LT,
         sd.ItemDescription,
-        sd.PRIME_VNDR,
+
         CAST(sd.MO_Count AS float)
             / NULLIF(CAST(sd.Demand_Window_Days AS float), 0)       AS Demand_Density,
         -- MOs per day in the demand window; NULL when window = 0 (same-day MOs)
@@ -391,14 +335,7 @@ SELECT
     qi.Effective_LT                                          AS Lead_Time_Days,
     qi.Lead_Time_Coverage_Ratio,
 
-    -- ── Manufacturer sourcing ─────────────────────────────
-    COALESCE(msm.Manufacturer_Count, 1)                      AS Manufacturer_Count,
-    -- NULL from LEFT JOIN = single source by assumption; coalesced to 1
-    COALESCE(msm.Source_Type, 'SINGLE')                      AS Source_Type,
-    -- NULL from LEFT JOIN = 'SINGLE'
-    CASE WHEN msm.ITEMNMBR IS NULL THEN 'Y' ELSE 'N' END     AS Is_Single_Source,
-    -- 'Y' = not in registry = single source by assumption; highest risk flag
-    qi.PRIME_VNDR,
+
 
     -- ── Construct presence flags ──────────────────────────
     CASE WHEN ip.Demand_291_Total > 0 THEN 'Y' ELSE 'N' END  AS Has_Construct_291,
@@ -582,37 +519,7 @@ SELECT
     ws.Has_Suppressed_Row,
     ws.All_Rows_Clean,
 
-    -- ── Velocity signals (Phase 2; NULL until ETB_SDA_SNAPSHOT populated) ──
-    CASE
-        WHEN snap.ITEMNMBR IS NULL THEN NULL
-        ELSE ip.Total_Hedged_Demand
-             / NULLIF(qi.Ledger_Extended_Balance, 0)
-             - snap.Demand_Pressure_Ratio
-    END                                                      AS Pressure_Ratio_Delta,
-    -- positive = worsening; NULL = no prior snapshot
 
-    CASE WHEN snap.ITEMNMBR IS NULL THEN NULL
-         ELSE snap.MO_Count - qi.MO_Count
-    END                                                      AS MO_Count_Delta,
-    -- NULL = no prior snapshot; sudden positive = new MO entered window
-
-    CASE WHEN snap.ITEMNMBR IS NULL THEN NULL
-         ELSE DATEDIFF(day, CAST(GETDATE() AS date),
-                       ISNULL(arm.Demand_Due_Date, qi.First_Demand_Date))
-              - snap.Days_Until_First_Need
-    END                                                      AS Days_Until_First_Need_Delta,
-    -- should be -1/day when nothing changes; < -1 signals new earlier-dated MO
-
-    CASE
-        WHEN snap.ITEMNMBR IS NULL                           THEN NULL
-        WHEN (ip.Total_Hedged_Demand / NULLIF(qi.Ledger_Extended_Balance, 0)
-              - snap.Demand_Pressure_Ratio)
-                 >  cfg.Trend_Deteriorating_Threshold        THEN 'DETERIORATING'
-        WHEN (ip.Total_Hedged_Demand / NULLIF(qi.Ledger_Extended_Balance, 0)
-              - snap.Demand_Pressure_Ratio)
-                 <  cfg.Trend_Improving_Threshold            THEN 'IMPROVING'
-        ELSE                                                      'STABLE'
-    END                                                      AS Trend_Direction,
 
     -- ── Metadata ─────────────────────────────────────────
     CAST(GETDATE() AS date)                                  AS Analysis_Date,
@@ -641,9 +548,7 @@ LEFT JOIN MO_List ml
   ON  ml.ITEMNMBR = qi.ITEMNMBR
   -- pipe-delimited display label; absence acceptable
 
-LEFT JOIN dbo.ETB_MANUFACTURER_SOURCE_MAP msm
-  ON  msm.ITEMNMBR = qi.ITEMNMBR
-  -- absence = SINGLE source by design; this LEFT JOIN must never become INNER
+
 
 LEFT JOIN dbo.ETB_SDA_SNAPSHOT snap
   ON  snap.ITEMNMBR     = qi.ITEMNMBR
@@ -693,7 +598,7 @@ SharedBase AS (
         sa.ITEMNMBR, sa.ORDERNUMBER, sa.Construct,
         sa.Demand_Due_Date, sa.Net_Demand, sa.Ledger_Extended_Balance,
         sa.WFQ_Extended_Status, sa.Suppression_Status,
-        sa.PURCHASING_LT, sa.PRIME_VNDR, sa.Data_Quality_Flag,
+        sa.PURCHASING_LT, sa.Data_Quality_Flag,
         sa.ItemDescription, sa.Supply_Action_Recommendation,
         COALESCE(sa.PURCHASING_LT, cfg.Default_Lead_Time_Days) AS Effective_LT
     FROM dbo.ETB_SUPPLY_ACTION sa WITH (NOLOCK)
@@ -803,8 +708,7 @@ SELECT
     -- ── Carried from summary view ─────────────────────────
     qi.Shared_Demand_Type,
     sc.Contention_Risk_Band,
-    sc.Demand_Pressure_Ratio,
-    sc.Is_Single_Source
+    sc.Demand_Pressure_Ratio
 
 FROM SharedBase sb
 
@@ -874,8 +778,7 @@ HAVING COUNT(*) > 1;
 SELECT
     SUM(CASE WHEN Shared_Demand_Type    IS NULL THEN 1 ELSE 0 END) AS Null_Type,
     SUM(CASE WHEN Contention_Risk_Band  IS NULL THEN 1 ELSE 0 END) AS Null_Band,
-    SUM(CASE WHEN Manufacturer_Count    IS NULL THEN 1 ELSE 0 END) AS Null_Mfr,
-    SUM(CASE WHEN Is_Single_Source      IS NULL THEN 1 ELSE 0 END) AS Null_Single,
+
     SUM(CASE WHEN Supply_Action_Summary IS NULL THEN 1 ELSE 0 END) AS Null_Action,
     SUM(CASE WHEN Urgency_Score         IS NULL THEN 1 ELSE 0 END) AS Null_Urgency,
     SUM(CASE WHEN Report_Type           IS NULL THEN 1 ELSE 0 END) AS Null_ReportType
