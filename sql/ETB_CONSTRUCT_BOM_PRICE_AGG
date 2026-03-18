@@ -1,0 +1,57 @@
+/* Tunable parameters for cost logic and quality thresholds*/ SELECT GETDATE() AS Analysis_Timestamp, /* When the view was materialized*/ 0.00 AS Missing_Cost_Fallback, /* Default cost when no source found*/ 100.00 AS High_Variance_Threshold, 
+             /* Pct threshold for flagging cost variance*/ 180 AS Stale_Cost_Days/* Days beyond which cost considered stale*/ ), /* ============================================================================*/ Active_Demand AS
+    (SELECT LTRIM(RTRIM(Construct)) AS Construct, /* Normalize construct identifier*/ LTRIM(RTRIM(FG)) AS FG, /* Normalize FG identifier*/ LTRIM(RTRIM([FG Desc])) AS [FG_Desc], /* FG description (will canonicalize later)*/ LTRIM(RTRIM(ORDERNUMBER)) AS ORDERNUMBER, 
+                 /* MO identifier*/ LTRIM(RTRIM(ITEMNMBR)) AS ITEMNMBR, /* Part number*/ LTRIM(RTRIM(ItemDescription)) AS ItemDescription, /* Part description*/ LTRIM(RTRIM(UOM)) AS UOM, /* Unit of measure from demand*/ DUEDATE, 
+                 /* Safe numeric conversion with NULL fallback (Experiment 7: no negatives expected)*/ COALESCE (TRY_CAST(Deductions AS DECIMAL(18, 6)), 0) AS Qty
+    FROM    dbo.ETB_PAB_AUTO
+    WHERE LTRIM(RTRIM(ORDERNUMBER)) <> 'Beg Bal' /* Exclude the Beg Bal anchor row*/ AND Construct IS NOT NULL AND LTRIM(RTRIM(Construct)) <> ''/* Exclude NULL constructs (Experiment 5)*/ ), 
+/* ============================================================================*/ Aggregated_Parts AS
+    (SELECT Construct, ITEMNMBR, MAX(ItemDescription) AS ItemDescription, /* Part description (Experiment 21: 1:1 mapping)*/ MAX(UOM) AS Demand_UOM, /* FG aggregation (Experiment 10: canonicalize with MIN for determinism)*/ STRING_AGG(FG, ', ') AS FG_List, 
+                 /* All FGs consuming this part*/ STRING_AGG(ORDERNUMBER, ', ') AS MO_List, /* All MOs consuming this part*/ COUNT(DISTINCT FG) AS FG_Count, /* How many FGs share this part*/ COUNT(DISTINCT ORDERNUMBER) AS MO_Count, 
+                 /* How many MOs consume this part*/ MIN([FG_Desc]) AS FG_Desc_Canonical, /* Quantity rollups (Experiment 2: 82% of parts repeat across MOs)*/ SUM(Qty) AS Total_Demand_Qty, /* Total quantity needed*/ MAX(Qty) AS Max_MO_Qty, /* Largest single MO requirement*/ MIN(Qty) 
+                 AS Min_MO_Qty, /* Multiplicity flags for quality tracking*/ CASE WHEN COUNT(DISTINCT FG) > 1 THEN 1 ELSE 0 END AS Part_Multi_FG, CASE WHEN COUNT(DISTINCT ORDERNUMBER) > 1 THEN 1 ELSE 0 END AS Part_Multi_MO, 
+                 /* Due date bucketing (Experiment 8: 367 past due, 43 beyond 180 days)*/ MIN(DUEDATE) AS Earliest_DueDate, MAX(DUEDATE) AS Latest_DueDate
+    FROM    Active_Demand
+    GROUP BY Construct, ITEMNMBR
+    HAVING SUM(Qty) > 0/* Exclude zero-quantity parts (Experiment 9)*/ ), /* ============================================================================*/ Most_Recent_POP AS
+    (SELECT ITEMNMBR, UNITCOST AS POP_Cost, /* Most recent cost (not averaged)*/ DATERECD AS POP_Date, /* When this cost was recorded*/ ROW_NUMBER() OVER (PARTITION BY ITEMNMBR
+    ORDER BY DATERECD DESC, POPRCTNM DESC/* Latest date, tie-break by receipt num*/ ) AS rn
+/* rn=1 is most recent receipt*/ FROM dbo.POP30330
+WHERE UNITCOST > 0/* Exclude zero/invalid costs*/ ), /* ============================================================================*/ Cost_Variance AS
+    (SELECT ITEMNMBR, COUNT(*) AS Receipt_Count, /* How many receipt records*/ MIN(UNITCOST) AS Min_Cost, /* Lowest price seen*/ MAX(UNITCOST) AS Max_Cost, /* Highest price seen*/ AVG(UNITCOST) AS Avg_Cost, 
+                 /* Percentage variance: ((max - min) / avg) * 100*/ CAST(CASE WHEN AVG(UNITCOST) = 0 THEN 0 WHEN MAX(UNITCOST) = MIN(UNITCOST) THEN 0 ELSE (MAX(UNITCOST) - MIN(UNITCOST)) / NULLIF (AVG(UNITCOST), 0) * 100 END AS DECIMAL(10, 2)) AS Pct_Variance, 
+                 /* Flag if variance exceeds threshold (tunable in Config)*/ CASE WHEN (MAX(UNITCOST) - MIN(UNITCOST)) / NULLIF (AVG(UNITCOST), 0) * 100 >
+                     (SELECT High_Variance_Threshold
+                     FROM    Config) THEN 1 ELSE 0 END AS High_Variance_Flag
+    FROM    dbo.POP30330
+    WHERE UNITCOST > 0
+    GROUP BY ITEMNMBR
+    HAVING COUNT(*) > 1 AND MIN(UNITCOST) <> MAX(UNITCOST)/* Only multi-receipt parts with variance*/ ), /* ============================================================================*/ SS_Data AS
+    (SELECT ITEMNMBR, AverageCost AS SS_Cost, /* SS calc average cost*/ PurchasingUOM AS SS_Purch_UOM, /* Purchasing unit of measure*/ MfgUOM AS SS_Mfg_UOM, /* Manufacturing unit of measure*/ LeadDays, 'SS_Calc_Static' AS SS_Data_Source
+    FROM    dbo.ETB_SS_CALC
+    WHERE AverageCost > 0/* Exclude NULL/invalid costs*/ ), /* ============================================================================*/ Cost_Recency AS
+    (SELECT ITEMNMBR, MAX(DATERECD) AS Most_Recent_Receipt, DATEDIFF(DAY, MAX(DATERECD), GETDATE()) AS Cost_Age_Days, CASE WHEN DATEDIFF(DAY, MAX(DATERECD), GETDATE()) >
+                     (SELECT Stale_Cost_Days
+                     FROM    Config) THEN 1 ELSE 0 END AS Stale_Cost_Flag
+    FROM    dbo.POP30330
+    WHERE UNITCOST > 0
+    GROUP BY ITEMNMBR)
+    /* ============================================================================*/ SELECT /* Primary keys*/ ap.Construct, ap.ITEMNMBR, ap.ItemDescription, /* FG/MO aggregation*/ ap.FG_List, ap.MO_List, ap.FG_Count, ap.MO_Count, ap.FG_Desc_Canonical, 
+                /* Quantity*/ ap.Total_Demand_Qty, ap.Max_MO_Qty, ap.Min_MO_Qty, ap.Demand_UOM, /* Experiment 13: 45.x consumables missing in SS_Calc, use POP*/ COALESCE (p.POP_Cost, s.SS_Cost,
+                    (SELECT Missing_Cost_Fallback
+                    FROM    Config)) AS Unit_Cost, /* Cost source audit trail*/ CASE WHEN p.POP_Cost IS NOT NULL THEN 'POP_Recent' WHEN s.SS_Cost IS NOT NULL THEN 'SS_Avg' ELSE 'Missing' END AS Cost_Source, p.POP_Date AS Cost_Date, 
+                /* When POP cost was recorded*/ cr.Cost_Age_Days, /* Variance and quality flags*/ ISNULL(cv.High_Variance_Flag, 0) AS Cost_Variance_Flag, /* 1 if volatile pricing*/ ISNULL(cv.Pct_Variance, 0) AS Pct_Variance, /* Percentage variance amount*/ ISNULL(cv.Receipt_Count, 1) 
+                AS Receipt_Count, /* Number of POP receipts*/ ISNULL(cv.Min_Cost, p.POP_Cost) AS Min_Historical_Cost, ISNULL(cv.Max_Cost, p.POP_Cost) AS Max_Historical_Cost, /* Extended cost (quantity * unit cost)*/ ap.Total_Demand_Qty * COALESCE (p.POP_Cost, s.SS_Cost,
+                    (SELECT Missing_Cost_Fallback
+                    FROM    Config)) AS Extended_Cost, /* UOM alignment (Experiment 14: ~48% match, 52% missing)*/ s.SS_Purch_UOM, s.SS_Mfg_UOM, CASE WHEN s.SS_Purch_UOM IS NULL 
+                THEN 'Missing_SS' WHEN ap.Demand_UOM = s.SS_Purch_UOM THEN 'Match_Purch' WHEN ap.Demand_UOM = s.SS_Mfg_UOM THEN 'Match_Mfg' ELSE 'Mismatch' END AS UOM_Status, /* Data quality flags*/ CASE WHEN COALESCE (p.POP_Cost, s.SS_Cost) IS NULL 
+                THEN 0 ELSE 1 END AS Has_Cost_Data, CASE WHEN COALESCE (p.POP_Cost, s.SS_Cost) IS NULL THEN 'No_Cost' WHEN s.SS_Purch_UOM IS NULL THEN 'Missing_UOM' ELSE 'Complete' END AS Data_Quality_Flag, ap.Part_Multi_FG, ap.Part_Multi_MO, 
+                /* Due date metadata*/ ap.Earliest_DueDate, ap.Latest_DueDate, DATEDIFF(DAY, GETDATE(), ap.Earliest_DueDate) AS Days_To_First_Demand,
+                    /* Metadata*/ (SELECT Analysis_Timestamp
+                                          FROM    Config) AS Analysis_Timestamp
+   FROM    Aggregated_Parts ap /* Join most recent POP cost (rn=1 = most recent receipt)*/ LEFT JOIN
+                Most_Recent_POP p ON ap.ITEMNMBR = p.ITEMNMBR AND p.rn = 1 /* Join SS calc fallback*/ LEFT JOIN
+                SS_Data s ON ap.ITEMNMBR = s.ITEMNMBR /* Join cost variance data*/ LEFT JOIN
+                Cost_Variance cv ON ap.ITEMNMBR = cv.ITEMNMBR /* Join cost recency data*/ LEFT JOIN
+                Cost_Recency cr ON ap.ITEMNMBR = cr.ITEMNMBR
+   /* Final filters*/ WHERE ap.Total_Demand_Qty > 0;
