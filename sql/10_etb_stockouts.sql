@@ -1,69 +1,14 @@
--- ============================================================================
--- VIEW: ETB_STOCKOUTS
--- Purpose: 180-day forward stockout summary per item
--- Aggregates active, clean-data demand rows from ETB_SUPPLY_ACTION
--- Includes minimal client/program flags (just the number), max deficit, 
--- PO totals, WFQ rescues, and supply action urgency counters
--- Report type: 'RALPH_LOOP_180D_STOCKOUTS'
--- Integrated: March 2026 — KILO loop
--- Consumes: dbo.ETB_SUPPLY_ACTION (View 5)
--- ============================================================================
-WITH Windowed AS (
-    SELECT
-        s.ITEMNMBR,
-        s.ItemDescription,
-        s.UOM,
-        s.Construct,
-        s.Demand_Due_Date,
-        s.Inventory_Qty_Available,
-        s.Adjusted_Running_Balance,
-        s.Deficit_Qty,
-        s.POs_On_Order_Qty,
-        s.WFQ_Extended_Status,
-        s.Suppression_Status,
-        s.Net_Demand,
-        s.Data_Quality_Flag,
-        s.Supply_Action_Recommendation
-    FROM dbo.ETB_SUPPLY_ACTION s WITH (NOLOCK)
-    WHERE s.Demand_Due_Date >= CAST(GETDATE() AS date)
-      AND s.Demand_Due_Date < DATEADD(DAY, 181, CAST(GETDATE() AS date))
-      AND ISNULL(s.Net_Demand, 0) > 0
-      AND s.Suppression_Status NOT IN (
-          'BEGINNING BALANCE',
-          'SUPPRESSED: Stale & Unissued',
-          'SUPPRESSED: Full Coverage in Fence'
-      )
-      AND s.Data_Quality_Flag = 'CLEAN'
-)
-SELECT
-    w.ITEMNMBR                          AS Item_Number,
-    MAX(w.ItemDescription)              AS Description,
-    MAX(w.UOM)                          AS Unit_Of_Measure,
-    MAX(w.Inventory_Qty_Available)      AS On_Hand_Qty,
-    MIN(w.Adjusted_Running_Balance)     AS Min_Projected_Stockout,
-    MIN(w.Demand_Due_Date)              AS First_Deficit_Date,
-    1                                   AS Item_Stockout_Flag,
-
-    -- Minimal client/program flags (just the number)
-    MAX(CASE WHEN TRY_CAST(w.Construct AS int) = 291 THEN 1 ELSE 0 END) AS [291],
-    MAX(CASE WHEN TRY_CAST(w.Construct AS int) = 295 THEN 1 ELSE 0 END) AS [295],
-    MAX(CASE WHEN TRY_CAST(w.Construct AS int) = 298 THEN 1 ELSE 0 END) AS [298],
-    MAX(CASE WHEN TRY_CAST(w.Construct AS int) = 301 THEN 1 ELSE 0 END) AS [301],
-    MAX(CASE WHEN TRY_CAST(w.Construct AS int) = 303 THEN 1 ELSE 0 END) AS [303],
-
-    MAX(ISNULL(w.Deficit_Qty, 0))       AS Max_Deficit_180D,
-    SUM(ISNULL(w.POs_On_Order_Qty, 0))  AS Total_PO_Qty_On_Order,
-    SUM(CASE WHEN w.WFQ_Extended_Status = 'WFQ_RESCUED' THEN 1 ELSE 0 END) AS WFQ_Rescue_Count,
-
-    -- Supply action urgency counters
-    SUM(CASE WHEN w.Supply_Action_Recommendation = 'ORDER' THEN 1 ELSE 0 END) AS Count_Order,
-    SUM(CASE WHEN w.Supply_Action_Recommendation = 'BOTH'  THEN 1 ELSE 0 END) AS Count_Both,
-    SUM(CASE WHEN w.Supply_Action_Recommendation IN ('ORDER', 'BOTH')
-             AND w.Demand_Due_Date <= DATEADD(DAY, 10, CAST(GETDATE() AS date))
-             THEN 1 ELSE 0 END) AS Urgent_Count,
-
-    CAST(GETDATE() AS date)             AS Analysis_Date,
-    'RALPH_LOOP_180D_STOCKOUTS'         AS Report_Type
-FROM Windowed w
-GROUP BY w.ITEMNMBR
-HAVING MIN(w.Adjusted_Running_Balance) < 0;
+SELECT ITEMNMBR, MAX(ItemDescription) AS ItemDescription, MAX(UOM) AS UOM, MAX(PRIME_VNDR) AS Vendor, MAX(VendorItem) AS VendorItem, MAX(PURCHASING_LT) AS PURCHASING_LT, MIN(Demand_Due_Date) AS First_Deficit_Date, 
+             SUM(CASE WHEN Deficit_Qty > 0 THEN Deficit_Qty ELSE 0 END) AS Total_Deficit_Unconstrained, SUM(ISNULL(POs_On_Order_Qty, 0)) AS Total_PO_Qty_On_Order, MAX(CASE WHEN WFQ_Extended_Status = 'RESCUE' THEN 1 ELSE 0 END) AS WFQ_Rescue_Flag, 
+             SUM(CASE WHEN Construct = 'ORDER' THEN 1 ELSE 0 END) AS Count_Order, SUM(CASE WHEN Construct = 'BOTH' THEN 1 ELSE 0 END) AS Count_Both, SUM(CASE WHEN Is_Past_Due_In_Backlog = 1 THEN 1 ELSE 0 END) AS Urgent_Count, SUM(ISNULL(Additional_Order_Qty, 0)) 
+             AS Suggested_Order_Qty, MAX(CAST(GETDATE() AS DATE)) AS Analysis_Date, /* CUSTOMER STOCKOUT FLAGS */ MAX(CASE WHEN FG = '291' AND Deficit_Qty > 0 THEN 1 ELSE 0 END) AS [291], MAX(CASE WHEN FG = '295' AND Deficit_Qty > 0 THEN 1 ELSE 0 END) AS [295], 
+             MAX(CASE WHEN FG = '298' AND Deficit_Qty > 0 THEN 1 ELSE 0 END) AS [298], MAX(CASE WHEN FG = '301' AND Deficit_Qty > 0 THEN 1 ELSE 0 END) AS [301], MAX(CASE WHEN FG = '303' AND Deficit_Qty > 0 THEN 1 ELSE 0 END) AS [303]
+FROM   dbo.ETB_SUPPLY_ACTION
+/* change if your base table/view name differs*/ GROUP BY ITEMNMBR)
+    SELECT ITEMNMBR, ItemDescription, UOM, Vendor, VendorItem, PURCHASING_LT, TRY_CAST(PURCHASING_LT AS INT) AS Purchasing_LT_Int, First_Deficit_Date, Total_Deficit_Unconstrained, Total_PO_Qty_On_Order, WFQ_Rescue_Flag, Count_Order, Count_Both, Urgent_Count, 
+                Suggested_Order_Qty, Analysis_Date, [291], [295], [298], [301], [303], /* Latest Safe Order Date */ DATEADD(DAY, - TRY_CAST(PURCHASING_LT AS INT), First_Deficit_Date) AS Latest_Order_Date, /* Priority */ CASE WHEN DATEADD(DAY, - TRY_CAST(PURCHASING_LT AS INT), 
+                First_Deficit_Date) < CAST(GETDATE() AS DATE) THEN 'LATE' WHEN First_Deficit_Date <= DATEADD(DAY, 5, CAST(GETDATE() AS DATE)) THEN 'URGENT' ELSE 'NORMAL' END AS Priority, /* Customer Exposure */ CONCAT_WS(',', CASE WHEN [291] = 1 THEN '291' END, 
+                CASE WHEN [295] = 1 THEN '295' END, CASE WHEN [298] = 1 THEN '298' END, CASE WHEN [301] = 1 THEN '301' END, CASE WHEN [303] = 1 THEN '303' END) AS Customer_Risk, /* Vendor Execution Order */ ROW_NUMBER() OVER (PARTITION BY Vendor
+   ORDER BY CASE WHEN DATEADD(DAY, - TRY_CAST(PURCHASING_LT AS INT), First_Deficit_Date) < CAST(GETDATE() AS DATE) THEN 1 WHEN First_Deficit_Date <= DATEADD(DAY, 5, CAST(GETDATE() AS DATE)) THEN 2 ELSE 3 END, First_Deficit_Date, Suggested_Order_Qty DESC) 
+AS Vendor_Execution_Order
+FROM   Item_Aggregation;
